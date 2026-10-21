@@ -38,7 +38,10 @@ auctions, buildings and bankruptcy. Existing saved rooms remain compatible.
 
 Trade sliders and property selection update locally without rerunning Python.
 Only submitting an offer changes shared state. Property actions refresh their
-own window. HTTP connections are reused per server thread, and action commits
+own window. Background board polling pauses while a personal window is open
+and resumes on dismissal, so it cannot interrupt an edit. Submitting still
+checks the current database version; a stale offer or action must be reviewed
+and retried. HTTP connections are reused per server thread, and action commits
 reuse the authenticated render snapshot while retaining database version checks.
 The 0.75-second poll interval is a target, not a network latency guarantee;
 hosting load and distance from Supabase still affect responsiveness.

@@ -43,6 +43,7 @@ def rerun_fragment():
 
 
 def leave_view():
+    st.session_state.pop("active_desk",None)
     st.session_state.credentials=None
     st.session_state.browse_tables=True
     st.session_state.notice=None
@@ -97,7 +98,12 @@ def property_actions(s,pid,i):
     return result
 
 
-@st.dialog("Your table desk",width="large")
+def close_desk():
+    st.session_state.pop("active_desk",None)
+    st.session_state.desk_feedback=""
+
+
+@st.dialog("Your table desk",width="large",on_dismiss=close_desk)
 def desk(mode,property_id=None,trade_id=None):
     c=st.session_state.get("credentials")
     if not c or not backend:
@@ -126,6 +132,7 @@ def desk(mode,property_id=None,trade_id=None):
                 leave_view()
                 st.rerun()
             if mode in {"trade","review"}:
+                close_desk()
                 st.session_state.notice=None
                 st.rerun()
         except (engine.RuleError,Conflict,StorageError) as e:
@@ -135,7 +142,8 @@ def desk(mode,property_id=None,trade_id=None):
 
 def open_desk(mode,property_id=None,trade_id=None):
     st.session_state.desk_feedback=""
-    desk(mode,property_id,trade_id)
+    st.session_state.active_desk=(mode,property_id,trade_id)
+    st.rerun()
 
 
 def players(s):
@@ -263,7 +271,7 @@ def trade_ui(service,s,version,pid):
                 open_desk("review",trade_id=t["id"])
 
 
-@st.fragment(run_every=0.75)
+@st.fragment(run_every=None if st.session_state.get("active_desk") else 0.75)
 def game():
     invite=st.query_params.get("room","").upper()
     c=st.session_state.get("credentials")
@@ -382,5 +390,7 @@ def game():
 
 
 game()
+if st.session_state.get("active_desk"):
+    desk(*st.session_state.active_desk)
 st.caption("An independent fan-made property game. MONOPOLY is a trademark of Hasbro. No affiliation or endorsement. Original visual design; no supplied board artwork is redistributed.")
 
