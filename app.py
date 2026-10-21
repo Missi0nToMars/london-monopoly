@@ -29,6 +29,8 @@ def esc(x):
 
 def credentials(value):
     st.session_state.credentials=value
+    st.session_state.browse_tables=False
+    st.session_state.pop("private_key",None)
     st.query_params["room"]=value["code"]
 
 
@@ -221,10 +223,10 @@ def game():
         if not s:
             view={k:v for k,v in view.items() if k!="decks"}
         msg=table(state=view if s else None,board=[b.json() for b in BOARD],colors=COLORS,player_colors=PLAYER_COLORS,
-                  credentials=c,invite=invite,room=c["code"] if c else "",key="table")
+                  credentials=c,invite=invite,room=c["code"] if c else "",clear=st.session_state.get("browse_tables",False),key="table")
         if isinstance(msg,dict) and msg.get("nonce")!=st.session_state.get("component_nonce"):
             st.session_state.component_nonce=msg.get("nonce")
-            if msg.get("type")=="restore" and not c and msg.get("credentials"):
+            if msg.get("type")=="restore" and not c and not st.session_state.get("browse_tables") and msg.get("credentials"):
                 saved=msg["credentials"]
                 if isinstance(saved,dict) and {"code","session"}<=saved.keys() and service:
                     try:
@@ -318,6 +320,13 @@ def game():
             st.code((base.rstrip('/') if base else "")+"/?room="+c["code"],language=None)
             st.caption("Share this invitation or the room code. Your recovery key below is private; it controls your seat.")
             st.text_input("Private recovery key",value=c["session"],type="password",key="private_key")
+            st.caption("Your seat stays saved when you switch tables. Open this invitation again to return.")
+            if st.button("Create or join another table",use_container_width=True):
+                st.session_state.credentials=None
+                st.session_state.browse_tables=True
+                st.session_state.notice=None
+                st.query_params.clear()
+                st.rerun()
         with st.expander("How to play"):
             st.write("Start with £1,500. Buy or auction every unowned property you land on. Rent, taxes and card payments settle automatically. Complete a colour group to build evenly. There are 32 houses and 12 hotels. Mortgage property or sell buildings to raise funds. Negotiate trades through Deals. The last solvent player wins.")
             st.caption("Free Parking pays nothing. GO pays £200. Income Tax £200; Super Tax £100. No player loans or rent immunity deals.")
