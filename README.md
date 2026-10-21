@@ -34,7 +34,7 @@ key, deck order, or another player's authentication credential.
 
 Tokens have larger coloured bases, an active-player ring and a matching name
 legend. Persisted movement routes animate every square around corners, across
-GO and backwards for card moves, rather than sliding diagonally across the board.
+GO and backwards for card moves, rather than sliding diagonally across the board. The **Piece movement** menu selects Smooth, Gentle steps or Instant for this browser. Reduced-motion browsers default to Gentle steps, which visibly pauses on each adjacent square; they no longer skip the entire route. Smooth explicitly enables gliding between squares without changing operating-system settings. A progress line names the current square during movement.
 The activity feed uses icons and categories for rolls, purchases, rent, trades,
 auctions, buildings and bankruptcy. Existing saved rooms remain compatible.
 
@@ -160,4 +160,5 @@ winner using legal actions. Test participants are not exposed as AI opponents.
 - Public deployments need host monitoring and rate limiting for abuse at scale.
 - Passing tests does not certify every interpretation of every historical rules
   printing. Browser and Supabase integration checks must be reported separately.
+
 
