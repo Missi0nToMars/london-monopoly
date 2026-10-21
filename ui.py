@@ -57,5 +57,5 @@ def component():
     target=directory/"index.html"
     if not target.exists():
         target.write_text(HTML,encoding="utf-8")
-    return components.declare_component("london_table",path=str(directory))
+    return components.declare_component("london_table_"+fingerprint,path=str(directory))
 
