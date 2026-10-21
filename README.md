@@ -48,6 +48,48 @@ reuse the authenticated render snapshot while retaining database version checks.
 Turn-action callbacks commit before the automatic fragment render, avoiding the old extra rerun and database read. Component height messages are sent only when the height changes. Streamlit still redraws the game fragment after server actions; a zero-rerun client would require a separate frontend/API architecture. No player setting is needed for these improvements. The 0.75-second poll interval is a target, not a network latency guarantee;
 hosting load and distance from Supabase still affect responsiveness.
 
+## Room rules, clocks and admin mode
+
+The host can edit **Room rules & timers** in the lobby: starting cash, GO salary,
+double salary on GO, a Free Parking jackpot funded by bank payments, tax and jail
+amounts, auctions for declined purchases, even building/selling, and rent while
+the owner is in jail. Saving changes resets every player's Ready status; rules
+lock when the game starts. All players can inspect the chosen rules during play.
+
+New rooms enable a decision clock by default: 60 seconds for an ordinary
+decision, 180 for debt, 30 for each auction response, and removal after two
+consecutive missed decisions. The host can configure or disable these in the
+lobby and can grant up to five one-minute extensions per decision during play.
+Old saved rooms remain untimed. Manual decisions reset that player's miss count;
+trades and unrelated clicks do not reset the current deadline. Missed rolls roll
+automatically, purchases are declined, auction bids are passed, mortgage
+inheritances retain their mortgage, and building requests are declined. The first
+debt timeout grants another full grace period; repeated misses forfeit the seat
+using the same asset/creditor and winner handling as voluntary bankruptcy. No
+assets are automatically mortgaged or sold to make a decision for an absent player.
+
+Deadlines live in shared state and are enforced on the server. Authenticated
+polls advance expired decisions through compare-and-swap commits, so two readers
+cannot apply the same timeout twice. If all browsers are closed or the host is
+asleep, the next authenticated read processes the expiry and grants a fresh
+deadline for the next decision; it does not fast-forward many missed turns.
+Opening a personal window does not pause the stored deadline.
+
+Hover a player in the board legend, click their name, or use **Portfolio** above
+the board to highlight every property they own. The selector supports touch and
+keyboard use; All properties clears the highlight.
+
+**Admin commands** is an optional, intentionally unfair mode. Only the room's
+authenticated host can unlock it, using the fixed shared code **676767**, and
+only that host can issue powers. This is a game unlock switch, not a secret
+security credential; the public source contains the code. All players see the
+enabled-mode banner and every power is logged. Powers create/set cash, transfer
+one deed or a whole colour set, grant a set with free hotels, move a piece without
+landing effects, jail/release players, rig the host's next dice, skip a turn,
+bankrupt an opponent, or declare a winner. Most require no pending decision;
+cash powers can resolve debt. Hotel supply and ownership invariants still hold.
+Unlocking in the lobby resets Ready status. Disabling clears queued rigged dice.
+
 ## Run locally
 
 Python 3.12 recommended. From this directory:
@@ -107,7 +149,7 @@ ephemeral cloud storage for an online game.
 
 ## Rules and edition
 
-All 40 London spaces, 28 deeds, rents, 8 colour groups, building prices,
+At the default classic settings, all 40 London spaces, 28 deeds, rents, 8 colour groups, building prices,
 railways, utilities, and fixed £200 Income Tax / £100 Super Tax match the supplied
 board. There are two shuffled 16-card decks; card text is independently
 paraphrased using the familiar modern Classic UK card effects. Historical UK
@@ -120,7 +162,7 @@ player), colour-set rents, fresh dice for the Chance utility instruction,
 even building and selling, 32 houses / 12 hotels, building-shortage auctions,
 mortgages and redemption, mortgage-transfer interest, trades with immediate
 redemption choices, cash-raising for debts, bankruptcy transfers and bank
-auctions, and the last-player-standing win condition. Free Parking has no reward.
+auctions, and the last-player-standing win condition. Free Parking has no reward by default.
 Rent collection is automatic rather than requiring a human to request payment.
 
 Reference: [Hasbro Classic UK instructions](https://instructions.hasbro.com/en-gb/instruction/monopoly-game).
@@ -130,7 +172,7 @@ is distributed. This is an unofficial fan project, not a licensed Hasbro product
 ## Tests
 
 ```powershell
-python -m pytest test_game.py -q --cov=engine --cov=store
+python -m pytest test_game.py test_room_features.py -q --cov=engine --cov=store
 ```
 
 The suite covers all 40 spaces, all 32 cards, all 28 property purchases, rents,
@@ -148,11 +190,12 @@ winner using legal actions. Test participants are not exposed as AI opponents.
 - `store.py`: Supabase and local SQLite backends, membership and action service.
 - `schema.sql`: Supabase tables, protected functions and grants.
 - `test_game.py`: automated tests and six-player simulations.
+- `test_room_features.py`: rules, clocks, timeout races and admin permissions.
 
 ## Operational limits
 
-- Players need to respond to auctions and shortage decisions. A disconnected
-  player can reconnect, but there is no host kick, forced timeout, or AI substitute.
+- Configured decision clocks handle inactive players. Without clocks, players
+  must respond or reconnect. There is no AI substitute or ordinary host kick.
 - Refresh synchronization is polling (0.75 seconds), not a websocket subscription.
 - Each room retains its most recent 300 history entries. Completed rooms remain
   in Supabase until the owner removes them; no automatic data retention job exists.
@@ -160,5 +203,7 @@ winner using legal actions. Test participants are not exposed as AI opponents.
 - Public deployments need host monitoring and rate limiting for abuse at scale.
 - Passing tests does not certify every interpretation of every historical rules
   printing. Browser and Supabase integration checks must be reported separately.
+
+
 
 

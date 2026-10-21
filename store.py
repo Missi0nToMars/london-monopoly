@@ -162,6 +162,16 @@ class Service:
         code=room_code(code)
         record=self.backend.read(code)
         pid=self.authenticate(record,session)
+        advanced=engine.tick(record["payload"]["state"])
+        if advanced!=record["payload"]["state"]:
+            payload=copy.deepcopy(record["payload"])
+            payload["state"]=advanced
+            try:
+                self.backend.commit(code,record["version"],payload,uuid.uuid4().hex)
+            except Conflict:
+                pass  # Another authenticated reader already advanced the clock.
+            record=self.backend.read(code)
+            pid=self.authenticate(record,session)
         self._code,self._record=code,record
         return record["payload"]["state"],record["version"],pid
 

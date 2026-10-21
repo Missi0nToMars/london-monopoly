@@ -1,6 +1,8 @@
 """Server-only, serializable rules engine. Rejected actions never mutate input state."""
 import copy
 import secrets
+import time
+import json
 from data import BOARD, DEEDS, GROUPS, DECKS, TOKENS
 
 
@@ -23,6 +25,139 @@ def log(s, text):
     s["events"] = s["events"][-300:]
 
 
+
+DEFAULT_RULES=dict(starting_cash=1500,go_salary=200,double_go=False,free_parking=False,
+                   income_tax=200,super_tax=100,jail_fine=50,decline_auction=True,
+                   even_build=True,rent_in_jail=True,clock_enabled=True,
+                   decision_seconds=60,debt_seconds=180,auction_seconds=30,miss_limit=2)
+
+def room_rules(s):
+    # Saved games from before clocks existed remain untimed.
+    return {**DEFAULT_RULES,**({"clock_enabled":False} if "rules" not in s else s["rules"])}
+
+def configure_rules(s,pid,changes):
+    require(pid==s["host"],"Only the host can change room rules.")
+    require(s["status"]=="lobby","Room rules are locked after the game starts.")
+    require(isinstance(changes,dict) and set(changes)<=set(DEFAULT_RULES),"Choose supported room rules.")
+    r={**room_rules(s),**changes}
+    ranges={"starting_cash":(500,5000),"go_salary":(0,1000),"income_tax":(0,1000),
+            "super_tax":(0,500),"jail_fine":(0,500),"decision_seconds":(30,300),
+            "debt_seconds":(60,600),"auction_seconds":(15,120),"miss_limit":(2,5)}
+    for key,value in r.items():
+        if key in ranges:number(value,*ranges[key])
+        else:require(type(value) is bool,"Use a checkbox for this rule.")
+    if r!=room_rules(s):
+        for player in s["players"].values():
+            player.update(money=r["starting_cash"],ready=False)
+        s["rules"]=r
+        log(s,"The host updated room rules. Everyone must ready up again.")
+
+def clock_context(s):
+    if s["status"]!="playing" or not room_rules(s)["clock_enabled"]:return None
+    r=room_rules(s);a=s["auction"];b=s["building_request"]
+    if a:
+        waiting=[q for q in a["eligible"] if q not in a["passed"] and q!=a["leader"]]
+        if not waiting:return None
+        return dict(pid=waiting[0],kind="auction",key=json.dumps(["auction",a],sort_keys=True),seconds=r["auction_seconds"])
+    if b:
+        waiting=[q for q in b["eligible"] if q not in b["responses"]]
+        if not waiting:return None
+        return dict(pid=waiting[0],kind="building",key=json.dumps(["building",b],sort_keys=True),seconds=r["decision_seconds"])
+    task=s["queue"][0] if s["queue"] else None
+    if task:
+        return dict(pid=task["pid"],kind=task["type"],key=json.dumps(["task",task,s["roll_id"]],sort_keys=True),
+                    seconds=r["debt_seconds"] if task["type"]=="pay" else r["decision_seconds"])
+    return dict(pid=current(s),kind=s["stage"],key=f"turn:{s['turn']}:{s['roll_id']}:{s['stage']}",seconds=r["decision_seconds"])
+
+def sync_clock(s,now):
+    context=clock_context(s)
+    if context is None:
+        s.pop("clock",None)
+    elif not s.get("clock") or s["clock"]["key"]!=context["key"]:
+        s["clock"]={**context,"deadline":now+context["seconds"],"extensions":0}
+
+def tick(state,now=None):
+    now=time.time() if now is None else now
+    s=copy.deepcopy(state)
+    sync_clock(s,now)
+    c=s.get("clock")
+    if not c or now<c["deadline"]:return s
+    pid=c["pid"];player=s["players"][pid]
+    player["missed_decisions"]=player.get("missed_decisions",0)+1
+    missed=player["missed_decisions"]
+    log(s,f"⏱ {player['name']} missed the {c['kind']} decision ({missed}/{room_rules(s)['miss_limit']}).")
+    if missed>=room_rules(s)["miss_limit"]:
+        log(s,f"⏱ {player['name']} was removed for repeated inactivity.")
+        bankrupt(s,pid,voluntary=True)
+        pump(s)
+    elif c["kind"]=="pay":
+        log(s,"Extra debt time granted. No assets are sold or mortgaged automatically.")
+        s["clock"]["deadline"]=now+room_rules(s)["debt_seconds"]
+    else:
+        action,values={"roll":("roll",{}),"end":("end",{}),"purchase":("decline",{}),
+                       "inherit":("inherit",{"mode":"keep"}),"auction":("pass",{}),
+                       "building":("building_reply",{"property":None})}[c["kind"]]
+        s=_apply(s,pid,action,now,True,values)
+        log(s,f"⏱ Automatic action for {player['name']}: {action}.")
+    sync_clock(s,now)
+    validate(s)
+    return s
+
+def admin_action(s,pid,args):
+    require(pid==s["host"] and s.get("admin_enabled",False),"Only the host of an unlocked admin table can use powers.")
+    power=args.get("power");target=args.get("target",pid)
+    require(target in living(s),"Choose an active player.")
+    require(not s["auction"] and not s["building_request"],"Finish the auction or building allocation before using powers.")
+    if power in {"add_cash","set_cash"}:
+        amount=number(args.get("amount"),0,1000000)
+        s["players"][target]["money"]=amount if power=="set_cash" else min(1000000,s["players"][target]["money"]+amount)
+        detail=f"{power}: {s['players'][target]['name']} now has £{s['players'][target]['money']:,}"
+    else:
+        require(not s["queue"],"Finish the pending decision first, or use a cash power to resolve debt.")
+        if power in {"take_property","take_set","free_hotels"}:
+            i=number(args.get("property"),0,39);deed(s,i)
+            ids=group(s,i) if power in {"take_set","free_hotels"} else [i]
+            if power=="free_hotels":require(BOARD[i].kind=="street","Choose a colour set.")
+            # Reclaim all improvements in affected sets before changing owners.
+            for j in set(k for item in ids for k in group(s,item)):
+                d=deed(s,j)
+                s["hotels" if d["level"]==5 else "houses"]+=1 if d["level"]==5 else d["level"]
+                d["level"]=0
+            for j in ids:deed(s,j).update(owner=target,mortgaged=False)
+            if power=="free_hotels":
+                require(s["hotels"]>=len(ids),"The bank needs enough hotels for this power.")
+                for j in ids:deed(s,j)["level"]=5
+                s["hotels"]-=len(ids)
+            s["trades"]=[]
+            detail=f"{power}: {s['players'][target]['name']} received {', '.join(BOARD[j].name for j in ids)}"
+        elif power=="teleport":
+            destination=number(args.get("destination"),0,39)
+            record_move(s,target,s["players"][target]["pos"],destination)
+            s["players"][target].update(pos=destination,jail=False,jail_turns=0)
+            detail=f"moved {s['players'][target]['name']} to {BOARD[destination].name} without salary or landing effects"
+        elif power=="jail":
+            send_jail(s,target);detail=f"jailed {s['players'][target]['name']}"
+        elif power=="release":
+            s["players"][target].update(jail=False,jail_turns=0);detail=f"freed {s['players'][target]['name']} from jail"
+        elif power=="force_dice":
+            require(target==pid and current(s)==pid and s["stage"]=="roll","Queue rigged dice only for the host's next roll.")
+            values=args.get("dice")
+            require(isinstance(values,list) and len(values)==2,"Choose two dice.")
+            for value in values:number(value,1,6)
+            s["rigged_dice"]={"pid":pid,"dice":values};detail=f"queued dice {values[0]} + {values[1]} for the host"
+        elif power=="skip_turn":
+            require(current(s)==target,"Choose the current player.")
+            end_turn(s);detail=f"skipped {s['players'][target]['name']}'s turn"
+        elif power=="bankrupt":
+            require(target!=pid,"Use the leave button to forfeit your own seat.")
+            bankrupt(s,target,voluntary=True);detail=f"bankrupted {s['players'][target]['name']}"
+        elif power=="win":
+            s.update(status="finished",winner=target,queue=[],trades=[],auction=None,building_request=None)
+            detail=f"declared {s['players'][target]['name']} the winner"
+        else:raise RuleError("Choose a listed admin power.")
+    log(s,"⚡ ADMIN · "+s["players"][pid]["name"]+" · "+detail)
+
+
 def new_game():
     decks = {k: list(range(len(v))) for k,v in DECKS.items()}
     for deck in decks.values():
@@ -31,7 +166,7 @@ def new_game():
                 doubles=0, dice=[1,1], roll_id=0, decks=decks, queue=[], trades=[],
                 deeds={str(i): dict(owner=None, level=0, mortgaged=False) for i in DEEDS},
                 houses=32, hotels=12, events=["A new London table is open."], winner=None,
-                last_card=None, auction=None, building_request=None)
+                last_card=None, auction=None, building_request=None,rules=DEFAULT_RULES.copy(),parking_pot=0,admin_enabled=False)
 
 
 def join(s, pid, name, token):
@@ -43,7 +178,7 @@ def join(s, pid, name, token):
     require(1 <= len(name) <= 24 and not any(ord(c)<32 for c in name), "Use a name of 1–24 characters.")
     require(not any(p["name"].casefold()==name.casefold() for p in s["players"].values()), "That name is in use.")
     require(token in TOKENS and not any(p["token"]==token for p in s["players"].values()), "Choose an available token.")
-    s["players"][pid] = dict(id=pid,name=name,token=token,money=1500,pos=0,jail=False,
+    s["players"][pid] = dict(id=pid,name=name,token=token,money=room_rules(s)["starting_cash"],pos=0,jail=False,
                              jail_turns=0,cards=[],bankrupt=False,ready=False)
     s["order"].append(pid)
     if s["host"] is None:
@@ -79,7 +214,7 @@ def monopoly(s, pid, i):
 
 def rent(s, i, dice, special=None):
     d, b = deed(s,i), BOARD[i]
-    if not d["owner"] or d["mortgaged"]:
+    if not d["owner"] or d["mortgaged"] or (not room_rules(s)["rent_in_jail"] and s["players"][d["owner"]]["jail"]):
         return 0
     if b.kind == "street":
         return b.rents[d["level"]] * (2 if d["level"]==0 and monopoly(s,d["owner"],i) else 1)
@@ -190,12 +325,15 @@ def pump(s):
             s["players"][pid]["money"]-=t["amount"]
             if t["to"]:
                 s["players"][t["to"]]["money"]+=t["amount"]
+            elif room_rules(s)["free_parking"]:
+                s["parking_pot"]=s.get("parking_pot",0)+t["amount"]
             log(s,f"{s['players'][pid]['name']} paid £{t['amount']:,} · {t['reason']}")
         elif kind=="move":
             p=s["players"][pid]
             if t["salary"] and t["dest"]<p["pos"]:
-                p["money"]+=200
-                log(s,f"{p['name']} collected £200 for passing GO.")
+                salary=room_rules(s)["go_salary"]*(2 if t["dest"]==0 and room_rules(s)["double_go"] else 1)
+                p["money"]+=salary
+                log(s,f"{p['name']} collected £{salary} for GO.")
             record_move(s,pid,p["pos"],t["dest"],-1 if not t["salary"] else 1)
             p["pos"]=t["dest"]
             log(s,f"{p['name']} landed on {BOARD[p['pos']].name}.")
@@ -220,9 +358,12 @@ def pump(s):
                     if amount:
                         s["queue"].insert(0,pay_task(pid,amount,d["owner"],b.name+" rent"))
             elif b.kind=="tax":
-                s["queue"].insert(0,pay_task(pid,b.price,reason=b.name))
+                s["queue"].insert(0,pay_task(pid,room_rules(s)["income_tax"] if b.id==4 else room_rules(s)["super_tax"],reason=b.name))
             elif b.kind in DECKS:
                 draw(s,pid,b.kind)
+            elif b.kind=="parking" and room_rules(s)["free_parking"]:
+                pot=s.get("parking_pot",0);p["money"]+=pot;s["parking_pot"]=0
+                log(s,f"{p['name']} collected the Free Parking pot of £{pot}.")
             elif b.kind=="gotojail":
                 send_jail(s,pid)
             continue
@@ -248,7 +389,7 @@ def can_build(s,pid,i,check_cash=True):
     d,b=deed(s,i),BOARD[i]
     require(monopoly(s,pid,i),"You need the complete colour set.")
     require(not any(deed(s,j)["mortgaged"] for j in group(s,i)),"Unmortgage the entire colour set first.")
-    require(d["level"]<5 and d["level"]==min(deed(s,j)["level"] for j in group(s,i)),"Build evenly, up to one hotel per street.")
+    require(d["level"]<5 and (not room_rules(s)["even_build"] or d["level"]==min(deed(s,j)["level"] for j in group(s,i))),"Build evenly, up to one hotel per street.")
     if check_cash:
         require(cash_available(s,pid)>=b.build,"You need more cash for this building.")
     return "hotels" if d["level"]==4 else "houses"
@@ -381,11 +522,38 @@ def trade_validate(s,t):
 
 
 def apply(state,pid,action,**args):
+    return _apply(state,pid,action,time.time(),False,args)
+
+def _apply(state,pid,action,now,automatic,args):
     s=copy.deepcopy(state)
     require(pid in s["players"],"Your session is not a member of this room.")
     p=s["players"][pid]
     require(not p["bankrupt"],"You are spectating after bankruptcy.")
     require(s["status"]!="finished","This game has finished.")
+    if not automatic and s.get("clock") and now>=s["clock"]["deadline"]:
+        raise RuleError("The decision clock expired. Refresh the table before acting.")
+    if action=="configure":
+        configure_rules(s,pid,args.get("rules"))
+        return s
+    if action=="admin_mode":
+        require(pid==s["host"],"Only the host can unlock admin mode.")
+        enabled=args.get("enabled")
+        require(type(enabled) is bool,"Choose whether admin mode is enabled.")
+        if enabled:require(secrets.compare_digest(str(args.get("unlock_code","")),"676767"),"Incorrect admin unlock code.")
+        s["admin_enabled"]=enabled
+        if s["status"]=="lobby":
+            for player in s["players"].values():player["ready"]=False
+        if not enabled:s.pop("rigged_dice",None)
+        log(s,"⚡ ADMIN mode "+("enabled" if enabled else "disabled")+" by the host.")
+        return s
+    if action=="admin":
+        admin_action(s,pid,args);pump(s);sync_clock(s,now);validate(s);return s
+    if action=="extend_clock":
+        require(pid==s["host"] and s.get("clock"),"Only the host can extend an active clock.")
+        require(s["clock"].get("extensions",0)<5,"This decision has already received five extensions.")
+        s["clock"]["deadline"]+=60;s["clock"]["extensions"]=s["clock"].get("extensions",0)+1
+        log(s,"⏱ The host added one minute to the current decision.")
+        return s
     if s["status"]=="lobby":
         if action=="resign":
             del s["players"][pid]
@@ -407,8 +575,11 @@ def apply(state,pid,action,**args):
             log(s,f"{s['players'][current(s)]['name']} goes first.")
         else:
             raise RuleError("Ready up or wait for the host.")
+        sync_clock(s,now)
         return s
 
+    if not automatic and action in {"roll","end","buy","decline","bid","pass","inherit","building_reply","jail_pay","jail_card"}:
+        p["missed_decisions"]=0
     blocked=bool(s["queue"] or s["auction"] or s["building_request"])
     t=s["queue"][0] if s["queue"] else None
     debt=t and t["type"]=="pay"
@@ -418,7 +589,8 @@ def apply(state,pid,action,**args):
     if action=="roll":
         require(s["stage"]=="roll","End your turn before rolling again.")
         # Dice inputs are never accepted from a client.
-        dice=[secrets.randbelow(6)+1,secrets.randbelow(6)+1]
+        rigged=s.pop("rigged_dice",None) if s.get("rigged_dice",{}).get("pid")==pid and s.get("admin_enabled") else None
+        dice=rigged["dice"] if rigged else [secrets.randbelow(6)+1,secrets.randbelow(6)+1]
         s["dice"]=dice
         s["roll_id"]+=1
         double=dice[0]==dice[1]
@@ -430,7 +602,7 @@ def apply(state,pid,action,**args):
             if double or p["jail_turns"]==3:
                 p["jail"]=False
                 if not double:
-                    s["queue"].append(pay_task(pid,50,reason="Third jail turn fine"))
+                    s["queue"].append(pay_task(pid,room_rules(s)["jail_fine"],reason="Third jail turn fine"))
                 s["queue"].append(move_task(pid,(p["pos"]+sum(dice))%40))
         else:
             s["doubles"]=s["doubles"]+1 if double else 0
@@ -446,7 +618,7 @@ def apply(state,pid,action,**args):
     elif action in {"jail_pay","jail_card"}:
         require(p["jail"] and s["stage"]=="roll","Choose this before trying to roll out of jail.")
         if action=="jail_pay":
-            spend(s,pid,50)
+            spend(s,pid,room_rules(s)["jail_fine"])
         else:
             deck=args.get("deck")
             require(deck in p["cards"],"You do not have that card.")
@@ -464,7 +636,7 @@ def apply(state,pid,action,**args):
             s["queue"].pop(0)
         else:
             s["queue"].pop(0)
-            auction_start(s,i)
+            if room_rules(s)["decline_auction"]:auction_start(s,i)
     elif action in {"bid","pass"}:
         a=s["auction"]
         require(a and pid in a["eligible"] and pid not in a["passed"],"You are not an active bidder.")
@@ -505,7 +677,7 @@ def apply(state,pid,action,**args):
                 e["level"]=0
             log(s,f"{p['name']} sold all buildings in the {BOARD[i].group} set at half price.")
         elif action=="sell":
-            require(d["level"]>0 and d["level"]==max(deed(s,j)["level"] for j in group(s,i)),"Sell buildings evenly.")
+            require(d["level"]>0 and (not room_rules(s)["even_build"] or d["level"]==max(deed(s,j)["level"] for j in group(s,i))),"Sell buildings evenly.")
             if d["level"]==5:
                 require(s["houses"]>=4,"The bank needs four houses to downgrade this hotel. Sell the whole set instead.")
                 s["houses"]-=4
@@ -617,6 +789,7 @@ def apply(state,pid,action,**args):
     else:
         raise RuleError("Unknown action.")
     pump(s)
+    sync_clock(s,now)
     validate(s)
     return s
 

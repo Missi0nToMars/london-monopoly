@@ -2,6 +2,7 @@
 import html
 import os
 import uuid
+import time
 import streamlit as st
 from streamlit.errors import StreamlitAPIException
 import engine
@@ -75,7 +76,7 @@ def component_data(s,version,pid):
     if view:
         view["trades"]=[t for t in s["trades"] if pid in (t["from"],t["to"])]
     return dict(state=view,version=version,pid=pid,board=[b.json() for b in BOARD],
-                colors=COLORS,player_colors=PLAYER_COLORS)
+                colors=COLORS,player_colors=PLAYER_COLORS,rules=engine.room_rules(s) if s else {},server_now=time.time())
 
 
 def property_actions(s,pid,i):
@@ -155,6 +156,77 @@ def players(s):
         st.markdown(f'<div class="player {"active" if active else ""}" style="--c:{PLAYER_COLORS[index]}"><div class="avatar">{p["token"]}</div><div><div class="pname">{esc(p["name"])} {"•" if active else ""}</div><div class="meta">{esc(status)}</div></div><div class="balance">£{p["money"]:,}</div></div>',unsafe_allow_html=True)
 
 
+RULE_LABELS={"starting_cash":"Starting cash (£)","go_salary":"GO salary (£)",
+             "income_tax":"Income Tax (£)","super_tax":"Super Tax (£)","jail_fine":"Jail fine (£)",
+             "double_go":"Double salary when landing exactly on GO","free_parking":"Bank payments fund a Free Parking jackpot",
+             "decline_auction":"Auction declined bank purchases","even_build":"Build and sell evenly",
+             "rent_in_jail":"Owners collect rent while in jail","clock_enabled":"Enable decision clock",
+             "decision_seconds":"Ordinary decision time (seconds)","debt_seconds":"Debt decision time (seconds)",
+             "auction_seconds":"Auction response time (seconds)","miss_limit":"Remove after consecutive missed decisions"}
+
+def room_settings(service,s,version,pid):
+    r=engine.room_rules(s);room=st.session_state.credentials["code"]
+    with st.expander("⚙ Room rules & timers"):
+        st.caption("The host chooses these before starting. Saving changes resets everyone's Ready status. Rules lock during play.")
+        if pid==s["host"] and s["status"]=="lobby":
+            with st.form("rules_"+room):
+                ranges={"starting_cash":(500,5000,100),"go_salary":(0,1000,50),"income_tax":(0,1000,50),
+                        "super_tax":(0,500,25),"jail_fine":(0,500,10),"decision_seconds":(30,300,15),
+                        "debt_seconds":(60,600,30),"auction_seconds":(15,120,5),"miss_limit":(2,5,1)}
+                chosen={}
+                for key,label in RULE_LABELS.items():
+                    if key in ranges:
+                        low,high,step=ranges[key]
+                        chosen[key]=int(st.number_input(label,min_value=low,max_value=high,value=r[key],step=step,key=room+"_rule_"+key))
+                    else:chosen[key]=st.checkbox(label,value=r[key],key=room+"_rule_"+key)
+                st.caption("A missed roll rolls automatically; a purchase is declined, an auction is passed, and a building request is declined. Debt receives another full grace period. Repeated misses forfeit the seat. The host can add time during play.")
+                if st.form_submit_button("Save room rules",use_container_width=True):
+                    do(service,version,"configure",rules=chosen);rerun_fragment()
+        else:
+            for key,label in RULE_LABELS.items():
+                st.write(f"{label}: {'On' if r[key] is True else 'Off' if r[key] is False else r[key]}")
+        if s.get("clock") and pid==s["host"]:
+            button(service,version,"Give this decision +60 seconds","extend_clock",key="clock_extend",disabled=s["clock"].get("extensions",0)>=5)
+
+ADMIN_POWERS={"add_cash":"Create cash","set_cash":"Set a player's cash","take_property":"Give / steal a property",
+              "take_set":"Give / steal a complete colour set","free_hotels":"Give a colour set with free hotels",
+              "teleport":"Move a piece anywhere","jail":"Send a player to jail","release":"Free a player from jail",
+              "force_dice":"Rig the host's next dice roll","skip_turn":"Skip the current player's turn",
+              "bankrupt":"Instantly bankrupt an opponent","win":"Declare an instant winner"}
+
+def admin_controls(service,s,version,pid):
+    if pid!=s["host"] or s["players"][pid]["bankrupt"] or s["status"]=="finished":return
+    with st.expander("⚡ Admin commands"):
+        st.caption("Only the host can unlock and use these unfair powers. Every use appears in table history, and all players can see when admin mode is enabled.")
+        if not s.get("admin_enabled"):
+            with st.form("admin_unlock",clear_on_submit=True):
+                code=st.text_input("Admin unlock code",type="password",key="admin_unlock_code")
+                if st.form_submit_button("Unlock admin mode",use_container_width=True):
+                    do(service,version,"admin_mode",enabled=True,unlock_code=code);rerun_fragment()
+            return
+        button(service,version,"Disable admin mode","admin_mode",key="disable_admin",enabled=False)
+        if s["status"]!="playing":
+            st.info("Admin mode is unlocked. Start the game to use powers.")
+            return
+        power=st.selectbox("Admin power",list(ADMIN_POWERS),format_func=ADMIN_POWERS.get,key="admin_power")
+        with st.form("admin_command"):
+            target=pid if power=="force_dice" else st.selectbox("Target player",engine.living(s),format_func=lambda q:s["players"][q]["name"],key="admin_target")
+            values=dict(power=power,target=target)
+            if power in {"add_cash","set_cash"}:
+                values["amount"]=int(st.number_input("Cash amount (£)",min_value=0,max_value=1000000,value=10000,step=100,key="admin_cash"))
+            if power in {"take_property","take_set","free_hotels"}:
+                choices=[i for i in DEEDS if power=="take_property" or BOARD[i].kind=="street"]
+                values["property"]=st.selectbox("Property / colour set",choices,format_func=property_label,key="admin_property_"+power)
+                st.caption("Reclaims affected buildings, clears mortgages and open trade offers. Free hotels still use the bank's hotel supply.")
+            if power=="teleport":values["destination"]=st.selectbox("Destination",list(range(40)),format_func=property_label,key="admin_destination")
+            if power=="force_dice":
+                one=st.selectbox("First die",list(range(1,7)),key="admin_die1")
+                two=st.selectbox("Second die",list(range(1,7)),key="admin_die2")
+                values["dice"]=[one,two]
+            st.caption("Most powers require the pending decision, auction and building allocation to be finished. Cash powers can resolve debt.")
+            if st.form_submit_button("⚡ Execute admin power",use_container_width=True):
+                do(service,version,"admin",**values);rerun_fragment()
+
 def controls(service,s,version,pid):
     me=s["players"][pid]
     if s["status"]=="finished":
@@ -233,7 +305,7 @@ def controls(service,s,version,pid):
     if mine:
         if me["jail"] and s["stage"]=="roll":
             st.caption(f"Jail attempt {me['jail_turns']+1} of 3. Doubles release you without an extra roll.")
-            button(service,version,"Pay £50 to leave jail","jail_pay",disabled=me["money"]<50)
+            button(service,version,f"Pay £{engine.room_rules(s)['jail_fine']} to leave jail","jail_pay",disabled=me["money"]<engine.room_rules(s)["jail_fine"])
             for deck in me["cards"]:
                 button(service,version,"Use "+deck+" jail card","jail_card",key="card_"+deck,deck=deck)
         if s["stage"]=="roll":
@@ -363,6 +435,11 @@ def game():
             who=s["players"].get(rolled.get("pid"),{}).get("name","Last roll")
             double="<b>DOUBLES</b>" if values[0]==values[1] else ""
             st.markdown(f'<div class="roll-callout" role="status"><small>{esc(who)} · dice result</small><strong>{values[0]} + {values[1]} = {sum(values)}</strong>{double}</div>',unsafe_allow_html=True)
+        if s.get("admin_enabled"):
+            st.warning("⚡ ADMIN MODE · The host has unfair powers. All admin actions are logged.")
+        if s.get("clock"):
+            clock=s["clock"];left=max(0,int(clock["deadline"]-time.time()))
+            st.caption(f"⏱ {s['players'][clock['pid']]['name']} · {clock['kind']} decision · about {left}s remaining · {s['players'][clock['pid']].get('missed_decisions',0)}/{engine.room_rules(s)['miss_limit']} misses")
         controls(service,s,version,pid)
         if s["status"]!="finished" and not s["players"][pid]["bankrupt"]:
             if st.button("declare bankrupcy",key="leave_game",use_container_width=True):
@@ -380,6 +457,8 @@ def game():
                 portfolio(service,s,version,pid)
             with t2:
                 trade_ui(service,s,version,pid)
+        room_settings(service,s,version,pid)
+        admin_controls(service,s,version,pid)
         with st.expander("Invite & reconnect"):
             base=os.environ.get("PUBLIC_APP_URL") or settings.get("PUBLIC_APP_URL","")
             st.code((base.rstrip('/') if base else "")+"/?room="+c["code"],language=None)
@@ -390,8 +469,8 @@ def game():
                 leave_view()
                 st.rerun()
         with st.expander("How to play"):
-            st.write("Start with £1,500. Buy or auction every unowned property you land on. Rent, taxes and card payments settle automatically. Complete a colour group to build evenly. There are 32 houses and 12 hotels. Mortgage property or sell buildings to raise funds. Negotiate trades through Deals. The last solvent player wins.")
-            st.caption("Free Parking pays nothing. GO pays £200. Income Tax £200; Super Tax £100. No player loans or rent immunity deals.")
+            st.write(f"Start with £{engine.room_rules(s)['starting_cash']}. Buy or auction every unowned property you land on. Rent, taxes and card payments settle automatically. Complete a colour group to build evenly. There are 32 houses and 12 hotels. Mortgage property or sell buildings to raise funds. Negotiate trades through Deals. The last solvent player wins.")
+            st.caption("See Room rules & timers for this table’s GO, tax, jail, Free Parking, building and clock settings. No player loans or rent immunity deals.")
             st.markdown("[Classic rules reference](https://instructions.hasbro.com/en-gb/instruction/monopoly-game)")
         st.caption(f"{backend.label} · State {version} · Live sync every 0.75 seconds")
 
