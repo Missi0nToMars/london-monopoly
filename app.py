@@ -260,7 +260,7 @@ def game():
         if not backend:
             st.subheader("The table is nearly ready")
             st.info("The host needs to connect the shared database before online games can start.")
-            st.caption("Deployment: run schema.sql in Supabase, then set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Streamlit's Secrets settings. For local testing set MONOPOLY_LOCAL=1.")
+            st.caption("Deployment: run schema.sql in Supabase, then set SUPABASE_URL and SUPABASE_SECRET_KEY in Streamlit's Secrets settings. For local testing set MONOPOLY_LOCAL=1.")
             return
         if backend.label.startswith("Local"):
             st.warning("Local test mode · games are saved on this server. Supabase must be configured for durable cloud hosting.")

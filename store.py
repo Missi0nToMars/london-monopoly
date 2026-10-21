@@ -82,7 +82,11 @@ class SupabaseBackend:
         if not url.startswith("https://"):
             raise StorageError("SUPABASE_URL must use HTTPS.")
         self.url=url.rstrip("/")+"/rest/v1/rpc/"
-        self.headers={"apikey":key,"Authorization":"Bearer "+key,"Content-Type":"application/json"}
+        self.headers={"apikey":key,"Content-Type":"application/json"}
+        # Modern Supabase secret keys are not JWTs. Sending one as a Bearer
+        # token makes PostgREST reject otherwise valid requests as Invalid JWT.
+        if not key.startswith("sb_secret_"):
+            self.headers["Authorization"]="Bearer "+key
 
     def rpc(self,name,body):
         try:
@@ -164,7 +168,8 @@ class Service:
 
 def configured_backend(settings):
     url=os.environ.get("SUPABASE_URL") or settings.get("SUPABASE_URL")
-    key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or settings.get("SUPABASE_SERVICE_ROLE_KEY")
+    key=(os.environ.get("SUPABASE_SECRET_KEY") or settings.get("SUPABASE_SECRET_KEY")
+         or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or settings.get("SUPABASE_SERVICE_ROLE_KEY"))
     if url and key:
         return SupabaseBackend(url,key)
     if os.environ.get("MONOPOLY_LOCAL")=="1" or settings.get("LOCAL_MODE",False):

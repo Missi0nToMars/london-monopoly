@@ -6,7 +6,19 @@ import uuid
 import pytest
 import engine as e
 from data import BOARD, DEEDS, GROUPS, DECKS, TOKENS
-from store import Service, SQLiteBackend, Conflict
+from store import Service, SQLiteBackend, SupabaseBackend, Conflict, configured_backend
+
+
+def test_modern_and_legacy_supabase_key_headers(monkeypatch):
+    modern=SupabaseBackend("https://example.supabase.co","sb_secret_test_only")
+    assert modern.headers["apikey"]=="sb_secret_test_only"
+    assert "Authorization" not in modern.headers
+    legacy=SupabaseBackend("https://example.supabase.co","eyJtest_only")
+    assert legacy.headers["Authorization"]=="Bearer eyJtest_only"
+    monkeypatch.delenv("SUPABASE_URL",raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY",raising=False)
+    configured=configured_backend({"SUPABASE_URL":"https://example.supabase.co","SUPABASE_SECRET_KEY":"sb_secret_test_only"})
+    assert configured.headers==modern.headers
 
 
 def game(n=2):

@@ -39,17 +39,20 @@ must use Supabase so restarting or redeploying Streamlit does not lose rooms.
 
 ```toml
 SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
-SUPABASE_SERVICE_ROLE_KEY = "YOUR_SERVER_ONLY_SERVICE_ROLE_KEY"
+SUPABASE_SECRET_KEY = "YOUR_SERVER_ONLY_SB_SECRET_KEY"
 PUBLIC_APP_URL = "https://YOUR_APP.streamlit.app"
 ```
 
-Do not commit actual secrets. Supabase's service-role key is server-only and
+Do not commit actual secrets. Supabase's secret key is server-only and
 must never be placed in frontend JavaScript or a public repository. Tables have
 RLS enabled, no anonymous or authenticated grants, and no public policies. Only
 the server role can execute the three database functions. The commit function
 locks the room row, checks its version, and records an action receipt in the
 same transaction. Stale simultaneous actions are rejected and the next refresh
 shows the latest state. The SQLite backend implements the same contract.
+
+Modern `sb_secret_` keys use the `apikey` header only; legacy JWT service-role
+keys also remain supported through `SUPABASE_SERVICE_ROLE_KEY` for existing setups.
 
 Player recovery keys contain 256 bits of random entropy; only SHA-256 hashes
 are stored in the database. Room codes are invitations, not player credentials.
