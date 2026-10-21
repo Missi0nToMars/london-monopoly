@@ -18,7 +18,7 @@ button.clicked{animation:clicked .45s ease-out}button.busy{background:#dce8d6;co
 #wrap[data-motion=smooth] .token{transition:left .20s linear,top .20s linear!important}
 #wrap[data-motion=steps] .token,#wrap[data-motion=instant] .token{transition:none!important}
 
-.clock-banner{display:flex;justify-content:space-between;gap:12px;background:#e8efdf;border:1px solid #bdcfac;padding:11px 14px;border-radius:10px;margin-bottom:10px;font-size:12px}.clock-banner strong{font:700 23px Georgia;white-space:nowrap}.clock-banner.urgent{background:#fff0d6;border-color:#c68c3d}.admin-note{background:#fff0d9;border:1px solid #d1a458;color:#82501c;padding:9px 12px;border-radius:9px;margin-bottom:10px;font-size:11px;font-weight:700}.portfolio-note{font-size:12px;color:#46653e;margin:0 0 10px;min-height:18px}.square.portfolio-highlight{box-shadow:inset 0 0 0 3px var(--portfolio-color,#d3a42d);background:#fff0b8!important;opacity:1!important;z-index:3}#board.highlighting .square:not(.portfolio-highlight){opacity:.40}.seat[aria-pressed=true]{box-shadow:0 0 0 2px var(--c);background:#f6ebcb}.bar select{max-width:150px}
+.clock-banner{display:flex;justify-content:space-between;gap:12px;background:#e8efdf;border:1px solid #bdcfac;padding:11px 14px;border-radius:10px;margin-bottom:10px;font-size:12px}.clock-banner strong{font:700 23px Georgia;white-space:nowrap}.clock-banner.urgent{background:#fff0d6;border-color:#c68c3d}.portfolio-note{font-size:12px;color:#46653e;margin:0 0 10px;min-height:18px}.square.portfolio-highlight{box-shadow:inset 0 0 0 3px var(--portfolio-color,#d3a42d);background:#fff0b8!important;opacity:1!important;z-index:3}#board.highlighting .square:not(.portfolio-highlight){opacity:.40}.seat[aria-pressed=true]{box-shadow:0 0 0 2px var(--c);background:#f6ebcb}.bar select{max-width:150px}
 </style></head><body><div id="wrap"></div><script>
 const post=(type,more={})=>parent.postMessage({isStreamlitMessage:true,type,...more},'*');
 const send=value=>post('streamlit:setComponentValue',{value,dataType:'json'});
@@ -49,8 +49,6 @@ function updateClock(){
     height();
 }
 function statusBanners(){
-    let admin=document.getElementById('admin-note');
-    if(args.state?.admin_enabled&&!admin){admin=el('div','admin-note','⚡ ADMIN MODE · Host powers can change this game unfairly. Every use is logged.');admin.id='admin-note';wrap.prepend(admin)}else if(!args.state?.admin_enabled)admin?.remove();
     updateClock();
 }
 setInterval(updateClock,250);

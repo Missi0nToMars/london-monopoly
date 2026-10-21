@@ -82,8 +82,9 @@ keyboard use; All properties clears the highlight.
 **Admin commands** is an optional, intentionally unfair mode. Only the room's
 authenticated host can unlock it, using the fixed shared code **676767**, and
 only that host can issue powers. This is a game unlock switch, not a secret
-security credential; the public source contains the code. All players see the
-enabled-mode banner and every power is logged. Powers create/set cash, transfer
+security credential; the public source contains the code. Admin-mode banners and
+enabled/disabled notices are not shown publicly; every actual power is still
+logged. Powers create/set cash, transfer
 one deed or a whole colour set, grant a set with free hotels, move a piece without
 landing effects, jail/release players, rig the host's next dice, skip a turn,
 bankrupt an opponent, or declare a winner. Most require no pending decision;

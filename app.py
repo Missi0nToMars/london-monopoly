@@ -72,9 +72,10 @@ def property_label(i):
 
 
 def component_data(s,version,pid):
-    view={k:v for k,v in s.items() if k!="decks"} if s else None
+    view={k:v for k,v in s.items() if k not in {"decks","admin_enabled"}} if s else None
     if view:
         view["trades"]=[t for t in s["trades"] if pid in (t["from"],t["to"])]
+        view["events"]=[event for event in s["events"] if not event.startswith("⚡ ADMIN mode ")]
     return dict(state=view,version=version,pid=pid,board=[b.json() for b in BOARD],
                 colors=COLORS,player_colors=PLAYER_COLORS,rules=engine.room_rules(s) if s else {},server_now=time.time())
 
@@ -197,7 +198,7 @@ ADMIN_POWERS={"add_cash":"Create cash","set_cash":"Set a player's cash","take_pr
 def admin_controls(service,s,version,pid):
     if pid!=s["host"] or s["players"][pid]["bankrupt"] or s["status"]=="finished":return
     with st.expander("⚡ Admin commands"):
-        st.caption("Only the host can unlock and use these unfair powers. Every use appears in table history, and all players can see when admin mode is enabled.")
+        st.caption("Only the host can unlock and use these powers. Every use appears in table history.")
         if not s.get("admin_enabled"):
             with st.form("admin_unlock",clear_on_submit=True):
                 code=st.text_input("Admin unlock code",type="password",key="admin_unlock_code")
@@ -435,8 +436,6 @@ def game():
             who=s["players"].get(rolled.get("pid"),{}).get("name","Last roll")
             double="<b>DOUBLES</b>" if values[0]==values[1] else ""
             st.markdown(f'<div class="roll-callout" role="status"><small>{esc(who)} · dice result</small><strong>{values[0]} + {values[1]} = {sum(values)}</strong>{double}</div>',unsafe_allow_html=True)
-        if s.get("admin_enabled"):
-            st.warning("⚡ ADMIN MODE · The host has unfair powers. All admin actions are logged.")
         if s.get("clock"):
             clock=s["clock"];left=max(0,int(clock["deadline"]-time.time()))
             st.caption(f"⏱ {s['players'][clock['pid']]['name']} · {clock['kind']} decision · about {left}s remaining · {s['players'][clock['pid']].get('missed_decisions',0)}/{engine.room_rules(s)['miss_limit']} misses")
