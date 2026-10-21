@@ -29,6 +29,63 @@ def game(n=2):
     return s
 
 
+def test_counteroffer_replaces_original_atomically_and_can_be_accepted():
+    s=game()
+    own(s,"0",[1]);own(s,"1",[8])
+    s=e.apply(s,"0","offer",to="1",give=[1],take=[8],give_cash=100,take_cash=25)
+    original=copy.deepcopy(s["trades"][0])
+    result=e.apply(s,"1","counteroffer",id=original["id"],to="0",give=[8],take=[1],give_cash=25,take_cash=150)
+    assert s["trades"]==[original]  # Draft/source snapshot is unchanged.
+    assert len(result["trades"])==1
+    counter=result["trades"][0]
+    assert counter["counter_of"]==original["id"]
+    assert (counter["from"],counter["to"],counter["give"],counter["take"])==("1","0",[8],[1])
+    with pytest.raises(e.RuleError,match="no longer open"):
+        e.apply(result,"1","accept",id=original["id"])
+    final=e.apply(result,"0","accept",id=counter["id"])
+    assert not final["trades"]
+    assert e.deed(final,1)["owner"]=="1" and e.deed(final,8)["owner"]=="0"
+    assert final["players"]["0"]["money"]==1375
+    assert final["players"]["1"]["money"]==1625
+    assert "counteroffer" in result["events"][-1]
+
+
+def test_counteroffer_permissions_and_invalid_terms_preserve_original():
+    s=game(3)
+    s=e.apply(s,"0","offer",to="1",give_cash=10)
+    original=copy.deepcopy(s)
+    tid=s["trades"][0]["id"]
+    for pid,kwargs in [("0",dict(to="1",give_cash=20)),("2",dict(to="0",give_cash=20)),
+                       ("1",dict(to="2",give_cash=20)),("1",dict(to="0",give=[1])),
+                       ("1",dict(to="0",give_cash=-1)),("1",dict(to="0"))]:
+        with pytest.raises(e.RuleError):
+            e.apply(s,pid,"counteroffer",id=tid,**kwargs)
+        assert s==original
+    with pytest.raises(e.RuleError,match="no longer open"):
+        e.apply(s,"1","counteroffer",id="expired",to="0",give_cash=20)
+
+
+def test_counteroffer_can_replace_at_offer_limit():
+    s=game()
+    for _ in range(12):
+        s=e.apply(s,"0","offer",to="1",give_cash=1)
+    original=s["trades"][0]
+    result=e.apply(s,"1","counteroffer",id=original["id"],to="0",take_cash=2)
+    assert len(result["trades"])==12
+    assert original not in result["trades"]
+
+
+def test_roll_result_keeps_roller_and_total_after_turn_changes(monkeypatch):
+    s=game()
+    s["players"]["0"]["pos"]=14
+    dice(monkeypatch,2,4)
+    result=e.apply(s,"0","roll")  # Free Parking needs no purchase decision.
+    assert result["last_roll"]==dict(pid="0",dice=[2,4],total=6,id=1,doubles=False)
+    result=e.apply(result,"0","end")
+    assert e.current(result)=="1" and result["last_roll"]["pid"]=="0"
+    assert "last_roll" not in s  # Existing saved rooms need no migration.
+
+
 def own(s,pid,ids):
     for i in ids:
         e.deed(s,i)["owner"]=pid

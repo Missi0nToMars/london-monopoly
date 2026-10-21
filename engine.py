@@ -422,6 +422,7 @@ def apply(state,pid,action,**args):
         s["dice"]=dice
         s["roll_id"]+=1
         double=dice[0]==dice[1]
+        s["last_roll"]=dict(pid=pid,dice=dice[:],total=sum(dice),id=s["roll_id"],doubles=double)
         s["stage"]="end"
         log(s,f"{p['name']} rolled {dice[0]} + {dice[1]}.")
         if p["jail"]:
@@ -560,17 +561,27 @@ def apply(state,pid,action,**args):
         bankrupt(s,pid)
     elif action=="resign":
         bankrupt(s,pid,voluntary=True)
-    elif action=="offer":
+    elif action in {"offer","counteroffer"}:
         require(not s["auction"] and not s["building_request"],"Finish the auction or building allocation before trading.")
-        require(len(s["trades"])<12,"Resolve or cancel open offers first.")
+        original=None
+        if action=="counteroffer":
+            original=next((x for x in s["trades"] if x["id"]==args.get("id")),None)
+            require(original is not None,"That offer is no longer open. Review the latest trades.")
+            require(original["to"]==pid,"Only the recipient can counter this offer.")
+            require(args.get("to")==original["from"],"Send the counteroffer to the original proposer.")
+        require(original is not None or len(s["trades"])<12,"Resolve or cancel open offers first.")
         tr=dict(id=secrets.token_hex(8),**{"from":pid,"to":args.get("to")},
                 give=args.get("give",[]),take=args.get("take",[]),give_cash=args.get("give_cash",0),
                 take_cash=args.get("take_cash",0),give_cards=args.get("give_cards",[]),take_cards=args.get("take_cards",[]),
                 from_redeem=args.get("redeem",[]))
         trade_validate(s,tr)
         require(set(tr["from_redeem"])<=set(tr["take"]),"Choose mortgages you are receiving.")
+        if original:
+            tr["counter_of"]=original["id"]
+            s["trades"].remove(original)
         s["trades"].append(tr)
-        log(s,f"{p['name']} proposed a trade to {s['players'][tr['to']]['name']}.")
+        verb="sent a counteroffer" if original else "proposed a trade"
+        log(s,f"{p['name']} {verb} to {s['players'][tr['to']]['name']}.")
     elif action in {"accept","reject","cancel"}:
         require(not s["auction"] and not s["building_request"],"Finish the auction or building allocation before trading.")
         tr=next((x for x in s["trades"] if x["id"]==args.get("id")),None)

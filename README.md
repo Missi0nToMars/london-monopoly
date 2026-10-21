@@ -14,7 +14,9 @@ key, deck order, or another player's authentication credential.
 3. Friends open the same app, select **Join**, and choose unused names and tokens.
 4. Each player selects **Ready**; the host starts once 2–6 players are ready.
 5. Roll, buy or auction properties, and open **Trade room** for a private trade
-   composer with live cash sliders, deed selection and a net-cash summary.
+   composer with live cash sliders, deed selection and a net-cash summary. Select
+   **Counteroffer** on an incoming offer to edit its reversed terms. Sending
+   replaces the original atomically; closing the draft leaves it open.
    Click a property in your collection or on the board to open its management
    window with rents, building purchases/sales, mortgages and redemption.
    Updates arrive automatically every 0.75 seconds.
@@ -36,14 +38,14 @@ GO and backwards for card moves, rather than sliding diagonally across the board
 The activity feed uses icons and categories for rolls, purchases, rent, trades,
 auctions, buildings and bankruptcy. Existing saved rooms remain compatible.
 
-Trade sliders and property selection update locally without rerunning Python.
+Dice results show the roller, both values, the total and a doubles label above the board and beside turn controls. Buttons depress on click; submitted desk actions show a saving state and block duplicate clicks. Trade sliders, property selection and counteroffer drafting update locally without rerunning Python.
 Only submitting an offer changes shared state. Property actions refresh their
 own window. Background board polling pauses while a personal window is open
 and resumes on dismissal, so it cannot interrupt an edit. Submitting still
 checks the current database version; a stale offer or action must be reviewed
 and retried. HTTP connections are reused per server thread, and action commits
 reuse the authenticated render snapshot while retaining database version checks.
-The 0.75-second poll interval is a target, not a network latency guarantee;
+Turn-action callbacks commit before the automatic fragment render, avoiding the old extra rerun and database read. Component height messages are sent only when the height changes. Streamlit still redraws the game fragment after server actions; a zero-rerun client would require a separate frontend/API architecture. No player setting is needed for these improvements. The 0.75-second poll interval is a target, not a network latency guarantee;
 hosting load and distance from Supabase still affect responsiveness.
 
 ## Run locally
@@ -158,3 +160,4 @@ winner using legal actions. Test participants are not exposed as AI opponents.
 - Public deployments need host monitoring and rate limiting for abuse at scale.
 - Passing tests does not certify every interpretation of every historical rules
   printing. Browser and Supabase integration checks must be reported separately.
+

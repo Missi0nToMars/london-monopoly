@@ -13,7 +13,7 @@ st.set_page_config(page_title="London Property Club",page_icon="🎩",layout="wi
 st.markdown('''<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap');
 html,body,[class*="css"],.stApp{font-family:'DM Sans',sans-serif;color:#203d35}.stApp{background:#f5f3eb}h1,h2,h3{font-family:'Playfair Display',Georgia,serif!important;color:#203d35}.block-container{max-width:1550px;padding-top:2.1rem;padding-bottom:2rem}header[data-testid="stHeader"]{background:transparent}[data-testid="stToolbar"]{opacity:.4}.stButton>button{border-radius:9px;border:1px solid #c8d2c4;min-height:43px;font-weight:600}.stButton>button[kind="primary"]{background:#254f42;border-color:#254f42;color:#fff9eb}.stTextInput input,.stSelectbox>div{border-radius:9px}.eyeline{letter-spacing:3px;font-size:11px;color:#789180;text-transform:uppercase}.title{font-family:'Playfair Display',Georgia,serif;font-size:38px;margin:0;font-weight:700}.lede{color:#758371;margin:7px 0 25px}.player{background:#fffcf4;border:1px solid #dfe3d6;border-left:5px solid var(--c);border-radius:10px;margin:8px 0;padding:12px 14px;display:flex;gap:12px;align-items:center}.player.active{box-shadow:0 0 0 2px #bdcfae}.avatar{font-size:27px}.pname{font-weight:700}.balance{margin-left:auto;font-size:20px;font-weight:700}.meta{font-size:11px;color:#7b8577}.banner{padding:12px 17px;background:#e5eadb;border-radius:9px;color:#415d4a;font-size:13px;margin-bottom:15px}.history{background:#fffcf6;border:1px solid #e1e5d8;border-radius:9px;padding:12px 15px;max-height:240px;overflow:auto;font-size:12px;color:#5d6f5f;line-height:1.6}.history p{border-bottom:1px solid #eeeee4;padding:4px 0;margin:0}.deed{background:#fffdf4;border:1px solid #d4d7c9;border-radius:9px;padding:15px}.deed h3{font-size:20px;margin-top:4px}.stTabs [data-baseweb="tab-list"]{gap:18px}.stTabs [data-baseweb="tab"]{font-size:13px}.stAlert{border-radius:9px}div[data-testid="stExpander"]{background:#fffdf6;border-radius:9px}div[data-testid="stForm"]{background:#fffdf6;border-radius:12px}.stCaption{color:#70816e}
-</style>''',unsafe_allow_html=True)
+.stButton>button{transition:transform .12s,box-shadow .12s,background .12s}.stButton>button:active{transform:translateY(3px) scale(.98);box-shadow:inset 0 3px 8px #153d3340}.stButton>button:focus-visible{outline:3px solid #cba958;outline-offset:2px}.roll-callout{background:#fff6d7;border:2px solid #c49b43;border-radius:12px;padding:12px 16px;margin:12px 0 17px}.roll-callout small{display:block;font-size:12px;color:#776636}.roll-callout strong{font-size:30px;color:#234c3d}.roll-callout b{display:block;font-size:11px;color:#9a6d16}</style>''',unsafe_allow_html=True)
 st.markdown('<div class="eyeline">GATHER YOUR FRIENDS. CLAIM YOUR CORNER.</div><div class="title">London Property Club <span style="font-size:23px">🎩</span></div><p class="lede">The classic London property game, together from anywhere.</p>',unsafe_allow_html=True)
 
 try:
@@ -57,12 +57,13 @@ def do(service,version,action,**kwargs):
         st.session_state.notice=None
     except (engine.RuleError,Conflict,StorageError) as e:
         st.session_state.notice=str(e)
-    rerun_fragment()
+    # Widget callbacks run before the fragment renders. Its automatic rerun
+    # reads the committed state once; an explicit rerun adds a second read.
 
 
 def button(service,version,label,action,key=None,disabled=False,primary=False,**kwargs):
-    if st.button(label,key=key or action,disabled=disabled,type="primary" if primary else "secondary",use_container_width=True):
-        do(service,version,action,**kwargs)
+    st.button(label,key=key or action,disabled=disabled,type="primary" if primary else "secondary",
+              use_container_width=True,on_click=do,args=(service,version,action),kwargs=kwargs)
 
 
 def property_label(i):
@@ -123,7 +124,7 @@ def desk(mode,property_id=None,trade_id=None):
         st.session_state.desk_nonce=msg.get("nonce")
         st.session_state.desk_ack=msg.get("nonce")
         permitted={"property":{"mortgage","unmortgage","build","sell","sell_set"},
-                   "trade":{"offer"},"review":{"accept","reject","cancel"},"leave":{"resign"}}
+                   "trade":{"offer"},"review":{"accept","reject","cancel","counteroffer"},"leave":{"resign"}}
         try:
             engine.require(msg.get("action") in permitted.get(mode,set()),"Choose an available action in this window.")
             service.act(c["code"],c["session"],msg.get("version"),uuid.uuid4().hex,msg["action"],**msg.get("args",{}))
@@ -356,6 +357,12 @@ def game():
             st.caption("Each browser remembers your seat. Share the room code or invitation link with friends.")
             return
         st.markdown(f'<div class="banner">ROOM <strong>{esc(c["code"])}</strong> &nbsp;·&nbsp; {len(s["players"])}/6 seats &nbsp;·&nbsp; Live table</div>',unsafe_allow_html=True)
+        if s.get("roll_id"):
+            rolled=s.get("last_roll",{})
+            values=rolled.get("dice",s["dice"])
+            who=s["players"].get(rolled.get("pid"),{}).get("name","Last roll")
+            double="<b>DOUBLES</b>" if values[0]==values[1] else ""
+            st.markdown(f'<div class="roll-callout" role="status"><small>{esc(who)} · dice result</small><strong>{values[0]} + {values[1]} = {sum(values)}</strong>{double}</div>',unsafe_allow_html=True)
         controls(service,s,version,pid)
         if s["status"]!="finished" and not s["players"][pid]["bankrupt"]:
             if st.button("declare bankrupcy",key="leave_game",use_container_width=True):
@@ -365,7 +372,7 @@ def game():
         if s["status"]=="playing":
             for incoming in s["trades"]:
                 if incoming["to"]==pid:
-                    st.info("🤝 Trade offer from "+s["players"][incoming["from"]]["name"])
+                    st.info(("🤝 Counteroffer from " if incoming.get("counter_of") else "🤝 Trade offer from ")+s["players"][incoming["from"]]["name"])
                     if st.button("Review incoming trade",key="incoming_"+incoming["id"],use_container_width=True):
                         open_desk("review",trade_id=incoming["id"])
             t1,t2=st.tabs(["Your portfolio","Deals"])
@@ -393,4 +400,5 @@ game()
 if st.session_state.get("active_desk"):
     desk(*st.session_state.active_desk)
 st.caption("An independent fan-made property game. MONOPOLY is a trademark of Hasbro. No affiliation or endorsement. Original visual design; no supplied board artwork is redistributed.")
+
 
