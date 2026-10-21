@@ -3,6 +3,7 @@ import html
 import os
 import uuid
 import streamlit as st
+from streamlit.errors import StreamlitAPIException
 import engine
 from data import BOARD, DEEDS, COLORS, TOKENS, PLAYER_COLORS
 from store import Service, StorageError, Conflict, configured_backend
@@ -34,6 +35,20 @@ def credentials(value):
     st.query_params["room"]=value["code"]
 
 
+def rerun_fragment():
+    try:
+        st.rerun(scope="fragment")
+    except StreamlitAPIException:
+        st.rerun()
+
+
+def leave_view():
+    st.session_state.credentials=None
+    st.session_state.browse_tables=True
+    st.session_state.notice=None
+    st.query_params.clear()
+
+
 def do(service,version,action,**kwargs):
     c=st.session_state.credentials
     try:
@@ -41,7 +56,7 @@ def do(service,version,action,**kwargs):
         st.session_state.notice=None
     except (engine.RuleError,Conflict,StorageError) as e:
         st.session_state.notice=str(e)
-    st.rerun()
+    rerun_fragment()
 
 
 def button(service,version,label,action,key=None,disabled=False,primary=False,**kwargs):
@@ -51,6 +66,76 @@ def button(service,version,label,action,key=None,disabled=False,primary=False,**
 
 def property_label(i):
     return BOARD[i].name
+
+
+def component_data(s,version,pid):
+    view={k:v for k,v in s.items() if k!="decks"} if s else None
+    if view:
+        view["trades"]=[t for t in s["trades"] if pid in (t["from"],t["to"])]
+    return dict(state=view,version=version,pid=pid,board=[b.json() for b in BOARD],
+                colors=COLORS,player_colors=PLAYER_COLORS)
+
+
+def property_actions(s,pid,i):
+    if i not in DEEDS or engine.deed(s,i)["owner"]!=pid:
+        return []
+    b,d=BOARD[i],engine.deed(s,i)
+    operations=[("unmortgage" if d["mortgaged"] else "mortgage",
+                 f"Redeem mortgage · £{b.price//2*11//10}" if d["mortgaged"] else f"Mortgage · receive £{b.price//2}")]
+    if b.kind=="street":
+        operations += [("build",f"{'Buy hotel' if d['level']==4 else 'Buy house'} · £{b.build}"),
+                       ("sell",f"Sell one building · receive £{b.build//2}"),
+                       ("sell_set","Sell this colour set's buildings")]
+    result=[]
+    for action,label in operations:
+        reason=""
+        try:
+            engine.apply(s,pid,action,property=i)
+        except engine.RuleError as e:
+            reason=str(e)
+        result.append(dict(action=action,label=label,enabled=not reason,reason=reason,primary=action=="build"))
+    return result
+
+
+@st.dialog("Your table desk",width="large")
+def desk(mode,property_id=None,trade_id=None):
+    c=st.session_state.get("credentials")
+    if not c or not backend:
+        return
+    service=Service(backend)
+    try:
+        s,version,pid=service.read(c["code"],c["session"])
+    except (engine.RuleError,StorageError) as e:
+        st.error(str(e))
+        return
+    trade=next((t for t in s["trades"] if t["id"]==trade_id and pid in (t["from"],t["to"])),None)
+    msg=table(mode=mode,property=property_id,trade=trade,
+              property_actions=property_actions(s,pid,property_id) if mode=="property" else [],
+              feedback=st.session_state.get("desk_feedback",""),ack=st.session_state.get("desk_ack"),
+              **component_data(s,version,pid),key="desk_"+mode+"_"+str(property_id or trade_id or ""))
+    if isinstance(msg,dict) and msg.get("type")=="action" and msg.get("nonce")!=st.session_state.get("desk_nonce"):
+        st.session_state.desk_nonce=msg.get("nonce")
+        st.session_state.desk_ack=msg.get("nonce")
+        permitted={"property":{"mortgage","unmortgage","build","sell","sell_set"},
+                   "trade":{"offer"},"review":{"accept","reject","cancel"},"leave":{"resign"}}
+        try:
+            engine.require(msg.get("action") in permitted.get(mode,set()),"Choose an available action in this window.")
+            service.act(c["code"],c["session"],msg.get("version"),uuid.uuid4().hex,msg["action"],**msg.get("args",{}))
+            st.session_state.desk_feedback=""
+            if msg["action"]=="resign":
+                leave_view()
+                st.rerun()
+            if mode in {"trade","review"}:
+                st.session_state.notice=None
+                st.rerun()
+        except (engine.RuleError,Conflict,StorageError) as e:
+            st.session_state.desk_feedback=str(e)
+        rerun_fragment()
+
+
+def open_desk(mode,property_id=None,trade_id=None):
+    st.session_state.desk_feedback=""
+    desk(mode,property_id,trade_id)
 
 
 def players(s):
@@ -155,41 +240,18 @@ def portfolio(service,s,version,pid):
     if not mine:
         st.caption("Land on a property to buy it, or join an auction.")
         return
-    i=st.selectbox("Your properties",mine,format_func=property_label,key="portfolio_property")
-    d=engine.deed(s,i)
-    st.caption(f"{'Mortgaged' if d['mortgaged'] else 'Mortgage value £'+str(BOARD[i].price//2)} · {'Hotel' if d['level']==5 else str(d['level'])+' houses'}")
-    c1,c2=st.columns(2)
-    with c1:
-        button(service,version,"Unmortgage" if d["mortgaged"] else "Mortgage","unmortgage" if d["mortgaged"] else "mortgage",property=i)
-    with c2:
-        button(service,version,"Build house / hotel","build",property=i,disabled=BOARD[i].kind!="street")
-    c1,c2=st.columns(2)
-    with c1:
-        button(service,version,"Sell one building","sell",property=i,disabled=d["level"]==0)
-    with c2:
-        button(service,version,"Sell set's buildings","sell_set",property=i,disabled=BOARD[i].kind!="street")
-    st.caption("Build and sell evenly. Buildings sell for half cost; mortgages pay half the printed property price.")
+    for i in mine:
+        d=engine.deed(s,i)
+        if st.button(("🏦 " if d["mortgaged"] else "🏨 " if d["level"]==5 else "🏠 " if d["level"] else "📜 ")+BOARD[i].name,key="deed_"+str(i),use_container_width=True):
+            open_desk("property",property_id=i)
 
 
 def trade_ui(service,s,version,pid):
     others=[q for q in engine.living(s) if q!=pid]
     if not others or s["players"][pid]["bankrupt"]:
         return
-    with st.expander("Propose a trade"):
-        other=st.selectbox("Trade with",others,format_func=lambda q:s["players"][q]["name"])
-        give=st.multiselect("Properties you give",engine.owned(s,pid),format_func=property_label)
-        take=st.multiselect("Properties you receive",engine.owned(s,other),format_func=property_label)
-        c1,c2=st.columns(2)
-        with c1:
-            give_cash=st.number_input("Cash you give (£)",min_value=0,step=1)
-        with c2:
-            take_cash=st.number_input("Cash you receive (£)",min_value=0,step=1)
-        give_cards=st.multiselect("Jail cards you give",s["players"][pid]["cards"])
-        take_cards=st.multiselect("Jail cards you receive",s["players"][other]["cards"])
-        mortgages=[i for i in take if engine.deed(s,i)["mortgaged"]]
-        redeem=st.multiselect("Redeem these incoming mortgages now",mortgages,format_func=property_label)
-        st.caption("Incoming mortgages cost 10% interest. Redeem now for principal + 10%, or keep the mortgage and pay another 10% when redeeming later.")
-        button(service,version,"Send offer","offer",to=other,give=give,take=take,give_cash=int(give_cash),take_cash=int(take_cash),give_cards=give_cards,take_cards=take_cards,redeem=redeem,primary=True)
+    if st.button("⇄ Open trade room",key="open_trade",use_container_width=True):
+        open_desk("trade")
     for t in s["trades"]:
         if pid not in (t["from"],t["to"]):
             continue
@@ -197,16 +259,11 @@ def trade_ui(service,s,version,pid):
             st.write(f"{s['players'][t['from']]['name']} → {s['players'][t['to']]['name']}")
             st.caption("Gives: "+", ".join([BOARD[i].name for i in t["give"]]+[f"£{t['give_cash']}"]+t["give_cards"]))
             st.caption("Receives: "+", ".join([BOARD[i].name for i in t["take"]]+[f"£{t['take_cash']}"]+t["take_cards"]))
-            if pid==t["to"]:
-                incoming=[i for i in t["give"] if engine.deed(s,i)["mortgaged"]]
-                redeemed=st.multiselect("Redeem incoming mortgages",incoming,format_func=property_label,key="redeem_"+t["id"])
-                button(service,version,"Accept trade","accept",key="accept_"+t["id"],id=t["id"],redeem=redeemed)
-                button(service,version,"Decline trade","reject",key="reject_"+t["id"],id=t["id"])
-            else:
-                button(service,version,"Cancel offer","cancel",key="cancel_"+t["id"],id=t["id"])
+            if st.button("Review offer" if pid==t["to"] else "View your offer",key="review_"+t["id"],use_container_width=True):
+                open_desk("review",trade_id=t["id"])
 
 
-@st.fragment(run_every=1.5)
+@st.fragment(run_every=0.75)
 def game():
     invite=st.query_params.get("room","").upper()
     c=st.session_state.get("credentials")
@@ -219,10 +276,7 @@ def game():
             st.error(str(e))
     left,right=st.columns([1.85,1],gap="large")
     with left:
-        view={k:v for k,v in s.items() if k!="decks"} if s else engine.new_game()
-        if not s:
-            view={k:v for k,v in view.items() if k!="decks"}
-        msg=table(state=view if s else None,board=[b.json() for b in BOARD],colors=COLORS,player_colors=PLAYER_COLORS,
+        msg=table(**component_data(s,version,pid),
                   credentials=c,invite=invite,room=c["code"] if c else "",clear=st.session_state.get("browse_tables",False),key="table")
         if isinstance(msg,dict) and msg.get("nonce")!=st.session_state.get("component_nonce"):
             st.session_state.component_nonce=msg.get("nonce")
@@ -235,27 +289,15 @@ def game():
                         st.rerun()
                     except (engine.RuleError,StorageError):
                         pass
-            elif msg.get("type")=="select" and type(msg.get("id")) is int:
-                st.session_state.selected=msg["id"]
+            elif s and msg.get("type")=="desk":
+                mode=msg.get("mode")
+                if mode=="property" and type(msg.get("property")) is int and 0<=msg["property"]<40:
+                    open_desk("property",property_id=msg["property"])
+                elif mode=="trade" and not s["players"][pid]["bankrupt"] and s["status"]=="playing":
+                    open_desk("trade")
         if s:
-            selected=st.selectbox("Inspect the board",range(40),format_func=property_label,index=st.session_state.get("selected",0),key=f"inspect_{st.session_state.get('selected',0)}")
-            b=BOARD[selected]
-            if selected in DEEDS:
-                d=engine.deed(s,selected)
-                with st.expander(b.name+" · title deed",expanded=True):
-                    st.write(f"Price £{b.price} · Mortgage £{b.price//2} · Owner: "+(s["players"][d["owner"]]["name"] if d["owner"] else "Bank"))
-                    if b.kind=="street":
-                        st.write("Base rent / 1 house / 2 / 3 / 4 / hotel")
-                        st.write(" · ".join("£"+str(v) for v in b.rents))
-                        st.caption(f"Each house or hotel costs £{b.build}. Complete colour sets double unimproved rent.")
-                    elif b.kind=="station":
-                        st.write("1 / 2 / 3 / 4 stations: £25 / £50 / £100 / £200")
-                    else:
-                        st.write("1 utility: 4 × dice. Both utilities: 10 × dice.")
             if s["last_card"]:
                 st.info(s["last_card"]["deck"].title()+" · "+s["last_card"]["text"])
-            st.caption("TABLE HISTORY")
-            st.markdown('<div class="history">'+''.join('<p>'+esc(e)+'</p>' for e in reversed(s["events"][-35:]))+'</div>',unsafe_allow_html=True)
         else:
             st.markdown('''<div style="padding:45px 30px 60px;border:1px solid #cbd8c7;border-radius:15px;background:linear-gradient(140deg,#dce7d3,#eef0df);text-align:center"><div class="eyeline">2–6 PLAYERS · CLASSIC LONDON</div><div style="font:700 66px Georgia;color:#234c3d;margin:20px 0">Own your<br>little piece<br>of London.</div><div style="color:#6d7f65;font-size:17px;margin:25px 0">Buy the streets. Build your empire.<br>Make a deal your friends will remember.</div><div style="font-size:37px;letter-spacing:15px">🚗 🎩 🐕 🚢</div></div>''',unsafe_allow_html=True)
     with right:
@@ -307,9 +349,17 @@ def game():
             return
         st.markdown(f'<div class="banner">ROOM <strong>{esc(c["code"])}</strong> &nbsp;·&nbsp; {len(s["players"])}/6 seats &nbsp;·&nbsp; Live table</div>',unsafe_allow_html=True)
         controls(service,s,version,pid)
+        if s["status"]!="finished" and not s["players"][pid]["bankrupt"]:
+            if st.button("declare bankrupcy",key="leave_game",use_container_width=True):
+                open_desk("leave")
         st.divider()
         players(s)
         if s["status"]=="playing":
+            for incoming in s["trades"]:
+                if incoming["to"]==pid:
+                    st.info("🤝 Trade offer from "+s["players"][incoming["from"]]["name"])
+                    if st.button("Review incoming trade",key="incoming_"+incoming["id"],use_container_width=True):
+                        open_desk("review",trade_id=incoming["id"])
             t1,t2=st.tabs(["Your portfolio","Deals"])
             with t1:
                 portfolio(service,s,version,pid)
@@ -322,16 +372,13 @@ def game():
             st.text_input("Private recovery key",value=c["session"],type="password",key="private_key")
             st.caption("Your seat stays saved when you switch tables. Open this invitation again to return.")
             if st.button("Create or join another table",use_container_width=True):
-                st.session_state.credentials=None
-                st.session_state.browse_tables=True
-                st.session_state.notice=None
-                st.query_params.clear()
+                leave_view()
                 st.rerun()
         with st.expander("How to play"):
             st.write("Start with £1,500. Buy or auction every unowned property you land on. Rent, taxes and card payments settle automatically. Complete a colour group to build evenly. There are 32 houses and 12 hotels. Mortgage property or sell buildings to raise funds. Negotiate trades through Deals. The last solvent player wins.")
             st.caption("Free Parking pays nothing. GO pays £200. Income Tax £200; Super Tax £100. No player loans or rent immunity deals.")
             st.markdown("[Classic rules reference](https://instructions.hasbro.com/en-gb/instruction/monopoly-game)")
-        st.caption(f"{backend.label} · State {version} · Polling every 1.5 seconds")
+        st.caption(f"{backend.label} · State {version} · Live sync every 0.75 seconds")
 
 
 game()

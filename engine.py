@@ -107,8 +107,18 @@ def move_task(pid, dest, salary=True, special=None):
     return dict(type="move",pid=pid,dest=dest,salary=salary,special=special)
 
 
+def record_move(s,pid,origin,destination,direction=1):
+    """Persist actual square-by-square routes, including chained card moves."""
+    distance=(destination-origin)*direction%40
+    path=[(origin+direction*step)%40 for step in range(1,distance+1)]
+    s["motion_seq"]=s.get("motion_seq",0)+1
+    s.setdefault("motions",[]).append(dict(seq=s["motion_seq"],pid=pid,path=path))
+    s["motions"]=s["motions"][-24:]
+
+
 def send_jail(s, pid):
     p=s["players"][pid]
+    record_move(s,pid,p["pos"],10)
     p.update(pos=10,jail=True,jail_turns=0)
     if current(s)==pid:
         s.update(stage="end",doubles=0)
@@ -186,6 +196,7 @@ def pump(s):
             if t["salary"] and t["dest"]<p["pos"]:
                 p["money"]+=200
                 log(s,f"{p['name']} collected £200 for passing GO.")
+            record_move(s,pid,p["pos"],t["dest"],-1 if not t["salary"] else 1)
             p["pos"]=t["dest"]
             log(s,f"{p['name']} landed on {BOARD[p['pos']].name}.")
             s["queue"].pop(0)
@@ -260,12 +271,47 @@ def liquid_value(s,pid):
         + deed(s,i)["level"]*BOARD[i].build//2 for i in owned(s,pid))
 
 
-def bankrupt(s,pid):
-    t=s["queue"][0]
-    require(t["type"]=="pay" and t["pid"]==pid,"Bankruptcy is available only for an unpaid debt.")
-    require(liquid_value(s,pid)<t["amount"],"You can cover this debt by selling buildings and mortgaging. Raise the funds first.")
+def settle_auction(s):
+    a=s["auction"]
+    if not a:
+        return
+    active=[q for q in a["eligible"] if q not in a["passed"]]
+    if not active or (a["leader"] and active==[a["leader"]]):
+        s["auction"]=None
+        if a["leader"]:
+            winner=a["leader"]
+            if a["targets"] is not None:
+                add_building(s,winner,int(a["targets"][winner]),a["bid"])
+            else:
+                s["players"][winner]["money"]-=a["bid"]
+                deed(s,a["property"])["owner"]=winner
+                log(s,f"{s['players'][winner]['name']} won {BOARD[a['property']].name} for £{a['bid']}.")
+        else:
+            log(s,"The auction ended without a bid.")
+
+
+def settle_building_request(s):
+    r=s["building_request"]
+    if r and len(r["responses"])==len(r["eligible"]):
+        targets={q:j for q,j in r["responses"].items() if j is not None}
+        s["building_request"]=None
+        if len(targets)>s[r["kind"]]:
+            auction_start(s,None,targets)
+        else:
+            for q,j in targets.items():
+                add_building(s,q,j,BOARD[j].build)
+
+
+def bankrupt(s,pid,voluntary=False):
+    t=s["queue"][0] if s["queue"] else None
+    debt=t and t["type"]=="pay" and t["pid"]==pid
+    if not voluntary:
+        require(debt,"Bankruptcy is available only for an unpaid debt.")
+        require(liquid_value(s,pid)<t["amount"],"You can cover this debt by selling buildings and mortgaging. Raise the funds first.")
     p=s["players"][pid]
-    creditor=t["to"]
+    creditor=t["to"] if debt else None
+    if creditor and s["players"][creditor]["bankrupt"]:
+        creditor=None
     additions=[]
     for i in owned(s,pid):
         d=deed(s,i)
@@ -290,13 +336,32 @@ def bankrupt(s,pid):
             s["decks"][deck].append(next(i for i,c in enumerate(DECKS[deck]) if c[1]=="jailfree"))
     p.update(bankrupt=True,money=0,cards=[])
     s["trades"]=[x for x in s["trades"] if pid not in (x["from"],x["to"])]
-    s["queue"]=additions+[x for x in s["queue"][1:] if x.get("pid")!=pid]
+    remaining=s["queue"] if voluntary else s["queue"][1:]
+    s["queue"]=additions+[x for x in remaining if x.get("pid")!=pid]
+    if voluntary:
+        log(s,f"{p['name']} declared bankruptcy and left the game.")
     log(s,f"{p['name']} is bankrupt. Assets went to {s['players'][creditor]['name'] if creditor else 'the bank'}.")
     if len(living(s))==1:
-        s.update(status="finished",winner=living(s)[0],queue=[],auction=None)
+        s.update(status="finished",winner=living(s)[0],queue=[],auction=None,building_request=None)
         log(s,f"{s['players'][s['winner']]['name']} wins the game!")
     elif current(s)==pid:
         end_turn(s)
+    if voluntary and s["status"]=="playing":
+        a=s["auction"]
+        if a:
+            a["eligible"]=[q for q in a["eligible"] if q!=pid]
+            a["passed"]=[q for q in a["passed"] if q!=pid]
+            if a["targets"] is not None:
+                a["targets"].pop(pid,None)
+            if a["leader"]==pid:
+                a.update(leader=None,bid=0,passed=[])
+                log(s,"The leading bidder left. Bidding restarted at £0 for the remaining players.")
+            settle_auction(s)
+        r=s["building_request"]
+        if r:
+            r["eligible"]=[q for q in r["eligible"] if q!=pid]
+            r["responses"].pop(pid,None)
+            settle_building_request(s)
 
 
 def trade_validate(s,t):
@@ -322,7 +387,13 @@ def apply(state,pid,action,**args):
     require(not p["bankrupt"],"You are spectating after bankruptcy.")
     require(s["status"]!="finished","This game has finished.")
     if s["status"]=="lobby":
-        if action=="ready":
+        if action=="resign":
+            del s["players"][pid]
+            s["order"].remove(pid)
+            if s["host"]==pid:
+                s["host"]=s["order"][0] if s["order"] else None
+            log(s,f"{p['name']} left the lobby.")
+        elif action=="ready":
             p["ready"]=not p["ready"]
         elif action=="start":
             require(pid==s["host"],"Only the host can start.")
@@ -406,19 +477,7 @@ def apply(state,pid,action,**args):
         else:
             require(a["leader"]!=pid,"The leading bidder cannot withdraw a committed bid.")
             a["passed"].append(pid)
-        active=[q for q in a["eligible"] if q not in a["passed"]]
-        if not active or (a["leader"] and active==[a["leader"]]):
-            s["auction"]=None
-            if a["leader"]:
-                winner=a["leader"]
-                if a["targets"] is not None:
-                    add_building(s,winner,int(a["targets"][winner]),a["bid"])
-                else:
-                    s["players"][winner]["money"]-=a["bid"]
-                    deed(s,a["property"])["owner"]=winner
-                    log(s,f"{s['players'][winner]['name']} won {BOARD[a['property']].name} for £{a['bid']}.")
-            else:
-                log(s,"The auction ended without a bid.")
+        settle_auction(s)
     elif action in {"mortgage","unmortgage","sell","sell_set","build"}:
         i=number(args.get("property"),0,39)
         d=deed(s,i)
@@ -481,14 +540,7 @@ def apply(state,pid,action,**args):
             i=number(i,0,39)
             require(can_build(s,pid,i)==r["kind"],"Choose the requested building type.")
         r["responses"][pid]=i
-        if len(r["responses"])==len(r["eligible"]):
-            targets={q:j for q,j in r["responses"].items() if j is not None}
-            s["building_request"]=None
-            if len(targets)>s[r["kind"]]:
-                auction_start(s,None,targets)
-            else:
-                for q,j in targets.items():
-                    add_building(s,q,j,BOARD[j].build)
+        settle_building_request(s)
     elif action=="inherit":
         require(t and t["type"]=="inherit" and t["pid"]==pid,"No inherited mortgage decision is pending for you.")
         i=t["property"]
@@ -506,6 +558,8 @@ def apply(state,pid,action,**args):
     elif action=="bankrupt":
         require(debt and t["pid"]==pid,"You do not have an unpaid debt.")
         bankrupt(s,pid)
+    elif action=="resign":
+        bankrupt(s,pid,voluntary=True)
     elif action=="offer":
         require(not s["auction"] and not s["building_request"],"Finish the auction or building allocation before trading.")
         require(len(s["trades"])<12,"Resolve or cancel open offers first.")

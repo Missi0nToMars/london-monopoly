@@ -430,3 +430,144 @@ def test_six_player_game_to_completion(seed,monkeypatch):
             continue
         s=e.apply(s,q,"roll" if s["stage"]=="roll" else "end")
     pytest.fail(f"Six-player simulation seed {seed} did not finish in {step+1} actions")
+
+
+def test_motion_routes_wrap_and_reverse_without_diagonals():
+    s=game(3)
+    e.record_move(s,"0",38,3)
+    e.record_move(s,"0",7,4,-1)
+    assert s["motions"][0]["path"]==[39,0,1,2,3]
+    assert s["motions"][1]["path"]==[6,5,4]
+    assert [m["seq"] for m in s["motions"]]==[1,2]
+    assert s["players"]["0"]["money"]==1500
+
+
+def test_real_roll_records_every_square(monkeypatch):
+    s=game(3)
+    s["players"]["0"]["pos"]=38
+    dice(monkeypatch,2,3)
+    result=e.apply(s,"0","roll")
+    assert result["motions"][-1]["path"]==[39,0,1,2,3]
+    assert result["players"]["0"]["money"]==1700
+    assert "motions" not in s
+
+
+def test_voluntary_leave_lobby_frees_seat_and_transfers_host():
+    s=e.new_game()
+    for i in range(3):
+        s=e.join(s,str(i),"Player "+str(i),TOKENS[i])
+    result=e.apply(s,"0","resign")
+    assert result["host"]=="1" and result["order"]==["1","2"]
+    assert "0" not in result["players"]
+    result=e.join(result,"new","New player",TOKENS[0])
+    assert len(result["players"])==3
+
+
+def test_voluntary_leave_returns_buildings_cards_and_auctions_assets():
+    s=game(3)
+    own(s,"0",[1,3])
+    levels(s,{1:2,3:2})
+    s["players"]["0"]["cards"]=["chance"]
+    index=next(i for i,c in enumerate(DECKS["chance"]) if c[1]=="jailfree")
+    s["decks"]["chance"].remove(index)
+    result=e.apply(s,"0","resign")
+    assert result["players"]["0"]["bankrupt"]
+    assert result["houses"]==32 and result["turn"]==1
+    assert not e.owned(result,"0") and not result["players"]["0"]["cards"]
+    assert result["auction"]["property"]==1 and "0" not in result["auction"]["eligible"]
+    e.validate(result)
+
+
+def test_voluntary_leave_honours_debt_creditor_even_when_solvent():
+    s=game(3)
+    own(s,"0",[1])
+    s["queue"]=[e.pay_task("0",200,"1","Rent")]
+    result=e.apply(s,"0","resign")
+    assert e.deed(result,1)["owner"]=="1"
+    assert result["players"]["1"]["money"]==3000
+    assert not result["queue"]
+
+
+def test_leave_preserves_another_players_pending_purchase():
+    s=game(3)
+    s["queue"]=[dict(type="purchase",pid="0",property=1)]
+    result=e.apply(s,"2","resign")
+    assert result["queue"]==s["queue"]
+    assert result["turn"]==0
+
+
+def test_leading_bidder_can_leave_without_stalling_auction():
+    s=game(3)
+    e.auction_start(s,1)
+    s=e.apply(s,"0","bid",amount=100)
+    s=e.apply(s,"1","pass")
+    result=e.apply(s,"0","resign")
+    assert result["auction"]["leader"] is None
+    assert result["auction"]["bid"]==0 and result["auction"]["passed"]==[]
+    assert result["auction"]["eligible"]==["1","2"]
+    result=e.apply(result,"1","bid",amount=20)
+    result=e.apply(result,"2","pass")
+    assert e.deed(result,1)["owner"]=="1"
+
+
+def test_last_opponent_leaving_announces_winner_and_clears_decisions():
+    s=game()
+    s["building_request"]=dict(kind="houses",eligible=["0"],responses={})
+    result=e.apply(s,"0","resign")
+    assert result["status"]=="finished" and result["winner"]=="1"
+    assert not result["building_request"] and not result["queue"]
+    with pytest.raises(e.RuleError):
+        e.apply(result,"0","resign")
+
+
+def test_leaving_building_request_does_not_wait_for_departed_player():
+    s=game(3)
+    own(s,"1",[1,3])
+    s["building_request"]=dict(kind="houses",eligible=["0","1"],responses={"1":1})
+    result=e.apply(s,"0","resign")
+    assert result["building_request"] is None
+    assert e.deed(result,1)["level"]==1
+    e.validate(result)
+
+
+def test_service_reuses_snapshot_and_database_rejects_stale_action(tmp_path):
+    class CountedBackend(SQLiteBackend):
+        reads=0
+        def read(self,code):
+            self.reads+=1
+            return super().read(code)
+    backend=CountedBackend(tmp_path/"speed.db")
+    service=Service(backend)
+    c=service.create("Alice",TOKENS[0])
+    _,v,_=service.read(c["code"],c["session"])
+    other=Service(backend)
+    other.act(c["code"],c["session"],v,uuid.uuid4().hex,"ready")
+    before=backend.reads
+    with pytest.raises(Conflict):
+        service.act(c["code"],c["session"],v,uuid.uuid4().hex,"ready")
+    assert backend.reads==before
+    _,v,_=service.read(c["code"],c["session"])
+    before=backend.reads
+    service.act(c["code"],c["session"],v,uuid.uuid4().hex,"resign")
+    assert backend.reads==before
+    with pytest.raises(e.RuleError):
+        service.read(c["code"],c["session"])
+
+
+def test_supabase_reuses_http_session(monkeypatch):
+    import store
+    created=[]
+    class FakeSession:
+        def __init__(self):
+            created.append(self)
+        def post(self,*args,**kwargs):
+            class Response:
+                status_code=200
+                def json(self):
+                    return {"ok":True}
+            return Response()
+    monkeypatch.setattr(store.requests,"Session",FakeSession)
+    backend=SupabaseBackend("https://example.supabase.co","sb_secret_test")
+    assert backend.rpc("example",{})=={"ok":True}
+    backend.rpc("example",{})
+    assert len(created)==1

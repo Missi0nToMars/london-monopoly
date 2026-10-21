@@ -1,5 +1,7 @@
 """Server-side storage. SQLite for local QA; Supabase for durable online tables."""
 import hashlib
+import copy
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -8,6 +10,7 @@ import secrets
 import sqlite3
 import string
 import time
+import threading
 import uuid
 import requests
 import engine
@@ -83,6 +86,7 @@ class SupabaseBackend:
             raise StorageError("SUPABASE_URL must use HTTPS.")
         self.url=url.rstrip("/")+"/rest/v1/rpc/"
         self.headers={"apikey":key,"Content-Type":"application/json"}
+        self._clients=threading.local()
         # Modern Supabase secret keys are not JWTs. Sending one as a Bearer
         # token makes PostgREST reject otherwise valid requests as Invalid JWT.
         if not key.startswith("sb_secret_"):
@@ -90,7 +94,9 @@ class SupabaseBackend:
 
     def rpc(self,name,body):
         try:
-            response=requests.post(self.url+name,json=body,headers=self.headers,timeout=15)
+            if not hasattr(self._clients,"session"):
+                self._clients.session=requests.Session()
+            response=self._clients.session.post(self.url+name,json=body,headers=self.headers,timeout=15)
         except requests.RequestException:
             raise StorageError("The shared database is temporarily unreachable. Your last saved turn is safe; try again.") from None
         if response.status_code>=400:
@@ -117,6 +123,8 @@ class SupabaseBackend:
 class Service:
     def __init__(self,backend):
         self.backend=backend
+        self._record=None
+        self._code=None
 
     def create(self,name,token):
         session=secrets.token_urlsafe(32)
@@ -146,24 +154,35 @@ class Service:
 
     def authenticate(self,record,session):
         pid=record["payload"]["members"].get(digest(session))
-        if pid is None:
+        if pid is None or pid not in record["payload"]["state"]["players"]:
             raise engine.RuleError("That recovery key does not belong to this room.")
         return pid
 
     def read(self,code,session):
-        record=self.backend.read(room_code(code))
+        code=room_code(code)
+        record=self.backend.read(code)
         pid=self.authenticate(record,session)
+        self._code,self._record=code,record
         return record["payload"]["state"],record["version"],pid
 
     def act(self,code,session,version,action_id,action,**args):
         code=room_code(code)
         engine.require(isinstance(action_id,str) and re.fullmatch(r"[a-f0-9]{32}",action_id),"Invalid action identifier.")
-        record=self.backend.read(code)
+        # Reuse this render's authenticated snapshot. The database still checks
+        # its version atomically; a simultaneous action cannot overwrite it.
+        record=copy.deepcopy(self._record) if self._code==code and self._record is not None else self.backend.read(code)
         pid=self.authenticate(record,session)
         if record["version"]!=version:
             raise Conflict("The table changed. Review the latest state and try again.")
         record["payload"]["state"]=engine.apply(record["payload"]["state"],pid,action,**args)
-        return self.backend.commit(code,version,record["payload"],action_id)
+        result=self.backend.commit(code,version,record["payload"],action_id)
+        self._record=None
+        return result
+
+
+@lru_cache(maxsize=4)
+def cloud_backend(url,key):
+    return SupabaseBackend(url,key)
 
 
 def configured_backend(settings):
@@ -171,7 +190,7 @@ def configured_backend(settings):
     key=(os.environ.get("SUPABASE_SECRET_KEY") or settings.get("SUPABASE_SECRET_KEY")
          or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or settings.get("SUPABASE_SERVICE_ROLE_KEY"))
     if url and key:
-        return SupabaseBackend(url,key)
+        return cloud_backend(url,key)
     if os.environ.get("MONOPOLY_LOCAL")=="1" or settings.get("LOCAL_MODE",False):
         return SQLiteBackend(os.environ.get("MONOPOLY_DB","local-games.db"))
     return None

@@ -1,5 +1,7 @@
 # London Property Club
 
+Live game: https://london-property-club-missi0ntomars.streamlit.app/
+
 An original interface for a classic London Monopoly game for 2–6 human players.
 Python rules run on the Streamlit server. Supabase stores shared rooms with
 transactional compare-and-swap updates. The browser never receives a database
@@ -11,10 +13,35 @@ key, deck order, or another player's authentication credential.
 2. Share the six-character room code or the invitation URL under **Invite & reconnect**.
 3. Friends open the same app, select **Join**, and choose unused names and tokens.
 4. Each player selects **Ready**; the host starts once 2–6 players are ready.
-5. Roll, buy or auction properties, trade through **Deals**, and manage buildings
-   and mortgages in **Your portfolio**. Updates arrive automatically every 1.5 seconds.
+5. Roll, buy or auction properties, and open **Trade room** for a private trade
+   composer with live cash sliders, deed selection and a net-cash summary.
+   Click a property in your collection or on the board to open its management
+   window with rents, building purchases/sales, mortgages and redemption.
+   Updates arrive automatically every 0.75 seconds.
 6. Browsers remember their seats in local storage. Keep the private recovery key
    if you want to reconnect from a different browser. Do not share recovery keys.
+7. **declare bankrupcy** opens a confirmation to permanently forfeit your seat.
+   In the lobby it frees the seat and transfers hosting if necessary. In a game,
+   your assets go to your current creditor or back to the bank for auction. This
+   is the user-requested voluntary exit feature; ordinary debt bankruptcy still
+   requires insolvency. A remaining sole player wins automatically.
+8. **Create or join another table** switches views while preserving the old seat;
+   it does not forfeit that seat. Reopen its invitation to return.
+
+## Interface and responsiveness
+
+Tokens have larger coloured bases, an active-player ring and a matching name
+legend. Persisted movement routes animate every square around corners, across
+GO and backwards for card moves, rather than sliding diagonally across the board.
+The activity feed uses icons and categories for rolls, purchases, rent, trades,
+auctions, buildings and bankruptcy. Existing saved rooms remain compatible.
+
+Trade sliders and property selection update locally without rerunning Python.
+Only submitting an offer changes shared state. Property actions refresh their
+own window. HTTP connections are reused per server thread, and action commits
+reuse the authenticated render snapshot while retaining database version checks.
+The 0.75-second poll interval is a target, not a network latency guarantee;
+hosting load and distance from Supabase still affect responsiveness.
 
 ## Run locally
 
@@ -121,7 +148,7 @@ winner using legal actions. Test participants are not exposed as AI opponents.
 
 - Players need to respond to auctions and shortage decisions. A disconnected
   player can reconnect, but there is no host kick, forced timeout, or AI substitute.
-- Refresh synchronization is polling (1.5 seconds), not a websocket subscription.
+- Refresh synchronization is polling (0.75 seconds), not a websocket subscription.
 - Each room retains its most recent 300 history entries. Completed rooms remain
   in Supabase until the owner removes them; no automatic data retention job exists.
 - Sessions use private bearer recovery keys, not email/password accounts.
