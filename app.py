@@ -14,7 +14,7 @@ st.set_page_config(page_title="London Property Club",page_icon="🎩",layout="wi
 st.markdown('''<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap');
 html,body,[class*="css"],.stApp{font-family:'DM Sans',sans-serif;color:#203d35}.stApp{background:#f5f3eb}h1,h2,h3{font-family:'Playfair Display',Georgia,serif!important;color:#203d35}.block-container{max-width:1550px;padding-top:2.1rem;padding-bottom:2rem}header[data-testid="stHeader"]{background:transparent}[data-testid="stToolbar"]{opacity:.4}.stButton>button{border-radius:9px;border:1px solid #c8d2c4;min-height:43px;font-weight:600}.stButton>button[kind="primary"]{background:#254f42;border-color:#254f42;color:#fff9eb}.stTextInput input,.stSelectbox>div{border-radius:9px}.eyeline{letter-spacing:3px;font-size:11px;color:#789180;text-transform:uppercase}.title{font-family:'Playfair Display',Georgia,serif;font-size:38px;margin:0;font-weight:700}.lede{color:#758371;margin:7px 0 25px}.player{background:#fffcf4;border:1px solid #dfe3d6;border-left:5px solid var(--c);border-radius:10px;margin:8px 0;padding:12px 14px;display:flex;gap:12px;align-items:center}.player.active{box-shadow:0 0 0 2px #bdcfae}.avatar{font-size:27px}.pname{font-weight:700}.balance{margin-left:auto;font-size:20px;font-weight:700}.meta{font-size:11px;color:#7b8577}.banner{padding:12px 17px;background:#e5eadb;border-radius:9px;color:#415d4a;font-size:13px;margin-bottom:15px}.history{background:#fffcf6;border:1px solid #e1e5d8;border-radius:9px;padding:12px 15px;max-height:240px;overflow:auto;font-size:12px;color:#5d6f5f;line-height:1.6}.history p{border-bottom:1px solid #eeeee4;padding:4px 0;margin:0}.deed{background:#fffdf4;border:1px solid #d4d7c9;border-radius:9px;padding:15px}.deed h3{font-size:20px;margin-top:4px}.stTabs [data-baseweb="tab-list"]{gap:18px}.stTabs [data-baseweb="tab"]{font-size:13px}.stAlert{border-radius:9px}div[data-testid="stExpander"]{background:#fffdf6;border-radius:9px}div[data-testid="stForm"]{background:#fffdf6;border-radius:12px}.stCaption{color:#70816e}
-.stButton>button{transition:transform .12s,box-shadow .12s,background .12s}.stButton>button:active{transform:translateY(3px) scale(.98);box-shadow:inset 0 3px 8px #153d3340}.stButton>button:focus-visible{outline:3px solid #cba958;outline-offset:2px}.roll-callout{background:#fff6d7;border:2px solid #c49b43;border-radius:12px;padding:12px 16px;margin:12px 0 17px}.roll-callout small{display:block;font-size:12px;color:#776636}.roll-callout strong{font-size:30px;color:#234c3d}.roll-callout b{display:block;font-size:11px;color:#9a6d16}</style>''',unsafe_allow_html=True)
+.stElementContainer:has(iframe[title^="ui.london_table_"]){opacity:1!important}.stButton>button{transition:transform .12s,box-shadow .12s,background .12s}.stButton>button:active{transform:translateY(3px) scale(.98);box-shadow:inset 0 3px 8px #153d3340}.stButton>button:focus-visible{outline:3px solid #cba958;outline-offset:2px}.roll-callout{background:#fff6d7;border:2px solid #c49b43;border-radius:12px;padding:12px 16px;margin:12px 0 17px}.roll-callout small{display:block;font-size:12px;color:#776636}.roll-callout strong{font-size:30px;color:#234c3d}.roll-callout b{display:block;font-size:11px;color:#9a6d16}</style>''',unsafe_allow_html=True)
 st.markdown('<div class="eyeline">GATHER YOUR FRIENDS. CLAIM YOUR CORNER.</div><div class="title">London Property Club <span style="font-size:23px">🎩</span></div><p class="lede">The classic London property game, together from anywhere.</p>',unsafe_allow_html=True)
 
 try:
@@ -101,60 +101,56 @@ def property_actions(s,pid,i):
     return result
 
 
-def close_desk():
-    st.session_state.pop("active_desk",None)
-    st.session_state.desk_feedback=""
+LIVE_ACTIONS={"ready","start","roll","end","buy","decline","bid","pass","jail_pay",
+              "jail_card","inherit","bankrupt","resign","building_reply","mortgage",
+              "unmortgage","build","sell","sell_set","offer","counteroffer","accept","reject","cancel"}
 
 
-@st.dialog("Your table desk",width="large",on_dismiss=close_desk)
-def desk(mode,property_id=None,trade_id=None):
+def live_event(service):
+    """Commit before Streamlit's single automatic fragment run, not after rendering."""
+    msg=st.session_state.get("live_table")
     c=st.session_state.get("credentials")
-    if not c or not backend:
+    if not isinstance(msg,dict) or not c or msg.get("nonce")==st.session_state.get("live_nonce"):
         return
-    service=Service(backend)
+    st.session_state.live_nonce=msg.get("nonce")
+    if msg.get("type")!="action":
+        return
+    st.session_state.live_ack=msg.get("nonce")
+    st.session_state.live_ok=False
     try:
-        s,version,pid=service.read(c["code"],c["session"])
-    except (engine.RuleError,StorageError) as e:
-        st.error(str(e))
-        return
-    trade=next((t for t in s["trades"] if t["id"]==trade_id and pid in (t["from"],t["to"])),None)
-    msg=table(mode=mode,property=property_id,trade=trade,
-              property_actions=property_actions(s,pid,property_id) if mode=="property" else [],
-              feedback=st.session_state.get("desk_feedback",""),ack=st.session_state.get("desk_ack"),
-              **component_data(s,version,pid),key="desk_"+mode+"_"+str(property_id or trade_id or ""))
-    if isinstance(msg,dict) and msg.get("type")=="action" and msg.get("nonce")!=st.session_state.get("desk_nonce"):
-        st.session_state.desk_nonce=msg.get("nonce")
-        st.session_state.desk_ack=msg.get("nonce")
-        permitted={"property":{"mortgage","unmortgage","build","sell","sell_set"},
-                   "trade":{"offer"},"review":{"accept","reject","cancel","counteroffer"},"leave":{"resign"}}
-        try:
-            engine.require(msg.get("action") in permitted.get(mode,set()),"Choose an available action in this window.")
-            service.act(c["code"],c["session"],msg.get("version"),uuid.uuid4().hex,msg["action"],**msg.get("args",{}))
-            st.session_state.desk_feedback=""
-            if msg["action"]=="resign":
-                leave_view()
-                st.rerun()
-            if mode in {"trade","review"}:
-                close_desk()
-                st.session_state.notice=None
-                st.rerun()
-        except (engine.RuleError,Conflict,StorageError) as e:
-            st.session_state.desk_feedback=str(e)
-        rerun_fragment()
+        engine.require(msg.get("action") in LIVE_ACTIONS,"Choose an available table action.")
+        engine.require(isinstance(msg.get("args",{}),dict),"Invalid action details.")
+        service.act(c["code"],c["session"],msg.get("version"),uuid.uuid4().hex,msg["action"],**msg.get("args",{}))
+        st.session_state.live_feedback=""
+        st.session_state.live_ok=True
+        # During a rolling source update an older storage module may remain
+        # loaded until restart. Its normal read path remains compatible.
+        snapshot=service.committed_view(c["session"]) if hasattr(service,"committed_view") else None
+        if snapshot is not None:
+            st.session_state.instant_snapshot=(c["code"],c["session"],snapshot)
+        if msg["action"]=="resign":
+            leave_view()
+            st.rerun()
+    except (engine.RuleError,Conflict,StorageError) as e:
+        st.session_state.live_feedback=str(e)
 
 
-def open_desk(mode,property_id=None,trade_id=None):
-    st.session_state.desk_feedback=""
-    st.session_state.active_desk=(mode,property_id,trade_id)
-    st.rerun()
-
-
-def players(s):
-    for index,pid in enumerate(s["order"]):
-        p=s["players"][pid]
-        status="Bankrupt · spectating" if p["bankrupt"] else "In jail" if p["jail"] else f"{len(engine.owned(s,pid))} properties · {len(p['cards'])} jail cards"
-        active=s["status"]=="playing" and engine.current(s)==pid
-        st.markdown(f'<div class="player {"active" if active else ""}" style="--c:{PLAYER_COLORS[index]}"><div class="avatar">{p["token"]}</div><div><div class="pname">{esc(p["name"])} {"•" if active else ""}</div><div class="meta">{esc(status)}</div></div><div class="balance">£{p["money"]:,}</div></div>',unsafe_allow_html=True)
+def live_data(s,version,pid):
+    cache_key=(st.session_state.credentials["code"],version,pid)
+    if st.session_state.get("legal_cache_key")!=cache_key:
+        choices=[]
+        if s["building_request"]:
+            for i in engine.owned(s,pid):
+                try:
+                    if engine.can_build(s,pid,i)==s["building_request"]["kind"]:
+                        choices.append(i)
+                except engine.RuleError:
+                    pass
+        st.session_state.legal_cache=dict(
+            property_options={str(i):property_actions(s,pid,i) for i in engine.owned(s,pid)},
+            building_choices=choices,liquid_value=engine.liquid_value(s,pid))
+        st.session_state.legal_cache_key=cache_key
+    return st.session_state.legal_cache
 
 
 RULE_LABELS={"starting_cash":"Starting cash (£)","go_salary":"GO salary (£)",
@@ -228,124 +224,7 @@ def admin_controls(service,s,version,pid):
             if st.form_submit_button("⚡ Execute admin power",use_container_width=True):
                 do(service,version,"admin",**values);rerun_fragment()
 
-def controls(service,s,version,pid):
-    me=s["players"][pid]
-    if s["status"]=="finished":
-        st.success(f"🏆 {s['players'][s['winner']]['name']} wins the table!")
-        return
-    if me["bankrupt"]:
-        st.info("You are spectating. Your friends' turns still update here.")
-        return
-    if s["status"]=="lobby":
-        st.subheader("Make yourself at home")
-        for q in s["players"].values():
-            st.write(f"{q['token']} {q['name']} · {'✓ ready' if q['ready'] else 'choosing a seat'}")
-        button(service,version,"✓ Ready" if not me["ready"] else "Not ready", "ready",primary=True)
-        if pid==s["host"]:
-            button(service,version,"Start the game", "start",disabled=len(s["players"])<2 or not all(q["ready"] for q in s["players"].values()))
-        else:
-            st.caption("The host starts when everyone is ready.")
-        return
-    a=s["auction"]
-    r=s["building_request"]
-    if a:
-        st.subheader("Going once, going twice…")
-        st.write("Building auction" if a["targets"] is not None else BOARD[a["property"]].name)
-        st.metric("Current bid",f"£{a['bid']:,}",s["players"][a["leader"]]["name"] if a["leader"] else "No bids yet")
-        if pid in a["eligible"] and pid not in a["passed"]:
-            amount=st.number_input("Your bid (£)",min_value=a["bid"]+1,value=a["bid"]+1,step=1,key=f"bid_{a['property']}_{a['bid']}")
-            button(service,version,"Place bid", "bid",amount=int(amount),primary=True)
-            button(service,version,"Pass on this auction", "pass",disabled=pid==a["leader"])
-        else:
-            st.caption("Waiting for the remaining bidders.")
-        waiting=[s["players"][q]["name"] for q in a["eligible"] if q not in a["passed"] and q!=a["leader"]]
-        st.caption("Still bidding: "+", ".join(waiting))
-        return
-    if r:
-        st.subheader("Limited building supply")
-        if pid in r["eligible"] and pid not in r["responses"]:
-            choices=[]
-            for i in engine.owned(s,pid):
-                try:
-                    if engine.can_build(s,pid,i)==r["kind"]:
-                        choices.append(i)
-                except engine.RuleError:
-                    pass
-            selected=st.selectbox("Request a building for",choices,format_func=property_label) if choices else None
-            button(service,version,"Request building", "building_reply",key="building_yes",property=selected,disabled=selected is None)
-            button(service,version,"No building for me", "building_reply",key="building_no",property=None)
-        else:
-            st.caption("Waiting for eligible owners to respond.")
-        return
-    t=s["queue"][0] if s["queue"] else None
-    if t:
-        who=s["players"][t["pid"]]["name"] if t.get("pid") else "Bank"
-        if t["type"]=="purchase":
-            i=t["property"]
-            st.subheader(BOARD[i].name)
-            st.write(f"Available from the bank · £{BOARD[i].price}")
-            if t["pid"]==pid:
-                button(service,version,f"Buy for £{BOARD[i].price}","buy",primary=True,disabled=me["money"]<BOARD[i].price)
-                button(service,version,"Send to auction","decline")
-            else:
-                st.caption(f"Waiting for {who} to buy or auction.")
-        elif t["type"]=="pay":
-            st.warning(f"{who} owes £{t['amount']:,} · {t['reason']}")
-            if t["pid"]==pid:
-                st.write("Raise cash using your portfolio or a trade. Payment settles automatically once you can afford it.")
-                button(service,version,"Declare bankruptcy","bankrupt",disabled=engine.liquid_value(s,pid)>=t["amount"])
-        elif t["type"]=="inherit":
-            i=t["property"]
-            st.warning(f"{who} received mortgaged {BOARD[i].name}.")
-            if t["pid"]==pid:
-                button(service,version,f"Keep mortgage · £{BOARD[i].price//20} interest","inherit",key="keep_inherit",mode="keep")
-                button(service,version,f"Redeem now · £{BOARD[i].price//2*11//10}","inherit",key="redeem_inherit",mode="redeem")
-        return
-    mine=engine.current(s)==pid
-    st.subheader("Your move" if mine else s["players"][engine.current(s)]["name"]+"'s turn")
-    if mine:
-        if me["jail"] and s["stage"]=="roll":
-            st.caption(f"Jail attempt {me['jail_turns']+1} of 3. Doubles release you without an extra roll.")
-            button(service,version,f"Pay £{engine.room_rules(s)['jail_fine']} to leave jail","jail_pay",disabled=me["money"]<engine.room_rules(s)["jail_fine"])
-            for deck in me["cards"]:
-                button(service,version,"Use "+deck+" jail card","jail_card",key="card_"+deck,deck=deck)
-        if s["stage"]=="roll":
-            button(service,version,"🎲 Try for doubles" if me["jail"] else "🎲 Roll the dice","roll",primary=True)
-        else:
-            button(service,version,"End turn →","end",primary=True)
-    else:
-        st.caption("The table updates automatically. You can manage your properties and propose trades between turns.")
-
-
-def portfolio(service,s,version,pid):
-    mine=engine.owned(s,pid)
-    if not mine:
-        st.caption("Land on a property to buy it, or join an auction.")
-        return
-    for i in mine:
-        d=engine.deed(s,i)
-        if st.button(("🏦 " if d["mortgaged"] else "🏨 " if d["level"]==5 else "🏠 " if d["level"] else "📜 ")+BOARD[i].name,key="deed_"+str(i),use_container_width=True):
-            open_desk("property",property_id=i)
-
-
-def trade_ui(service,s,version,pid):
-    others=[q for q in engine.living(s) if q!=pid]
-    if not others or s["players"][pid]["bankrupt"]:
-        return
-    if st.button("⇄ Open trade room",key="open_trade",use_container_width=True):
-        open_desk("trade")
-    for t in s["trades"]:
-        if pid not in (t["from"],t["to"]):
-            continue
-        with st.container(border=True):
-            st.write(f"{s['players'][t['from']]['name']} → {s['players'][t['to']]['name']}")
-            st.caption("Gives: "+", ".join([BOARD[i].name for i in t["give"]]+[f"£{t['give_cash']}"]+t["give_cards"]))
-            st.caption("Receives: "+", ".join([BOARD[i].name for i in t["take"]]+[f"£{t['take_cash']}"]+t["take_cards"]))
-            if st.button("Review offer" if pid==t["to"] else "View your offer",key="review_"+t["id"],use_container_width=True):
-                open_desk("review",trade_id=t["id"])
-
-
-@st.fragment(run_every=None if st.session_state.get("active_desk") else 0.75)
+@st.fragment(run_every=0.75 if st.session_state.get("credentials") else None)
 def game():
     invite=st.query_params.get("room","").upper()
     c=st.session_state.get("credentials")
@@ -353,9 +232,34 @@ def game():
     s=version=pid=None
     if c and service:
         try:
-            s,version,pid=service.read(c["code"],c["session"])
+            instant=st.session_state.pop("instant_snapshot",None)
+            if instant and instant[:2]==(c["code"],c["session"]):
+                s,version,pid=instant[2]
+            else:
+                s,version,pid=service.read(c["code"],c["session"])
+            st.session_state.last_live=(c["code"],c["session"],(s,version,pid))
+            st.session_state.sync_error=""
         except (engine.RuleError,StorageError) as e:
-            st.error(str(e))
+            saved=st.session_state.get("last_live")
+            if isinstance(e,StorageError) and saved and saved[:2]==(c["code"],c["session"]):
+                s,version,pid=saved[2]
+                st.session_state.sync_error=str(e)
+            else:
+                st.error(str(e))
+    if s:
+        # One persistent browser surface owns every ordinary play interaction.
+        # Native host tools live in a separate, non-polling fragment below it.
+        status=(c["code"],s["status"],s["host"])
+        previous=st.session_state.get("live_status")
+        st.session_state.live_status=status
+        if previous is not None and previous!=status:
+            st.rerun()
+        table(**component_data(s,version,pid),**live_data(s,version,pid),
+              credentials=c,room=c["code"],persistent=True,
+              ack=st.session_state.get("live_ack"),ok=st.session_state.get("live_ok",False),
+              feedback=st.session_state.get("live_feedback",""),sync_error=st.session_state.get("sync_error",""),
+              key="live_table",on_change=lambda:live_event(service))
+        return
     left,right=st.columns([1.85,1],gap="large")
     with left:
         msg=table(**component_data(s,version,pid),
@@ -371,12 +275,6 @@ def game():
                         st.rerun()
                     except (engine.RuleError,StorageError):
                         pass
-            elif s and msg.get("type")=="desk":
-                mode=msg.get("mode")
-                if mode=="property" and type(msg.get("property")) is int and 0<=msg["property"]<40:
-                    open_desk("property",property_id=msg["property"])
-                elif mode=="trade" and not s["players"][pid]["bankrupt"] and s["status"]=="playing":
-                    open_desk("trade")
         if s:
             if s["last_card"]:
                 st.info(s["last_card"]["deck"].title()+" · "+s["last_card"]["text"])
@@ -429,54 +327,37 @@ def game():
                             st.error(str(e))
             st.caption("Each browser remembers your seat. Share the room code or invitation link with friends.")
             return
-        st.markdown(f'<div class="banner">ROOM <strong>{esc(c["code"])}</strong> &nbsp;·&nbsp; {len(s["players"])}/6 seats &nbsp;·&nbsp; Live table</div>',unsafe_allow_html=True)
-        if s.get("roll_id"):
-            rolled=s.get("last_roll",{})
-            values=rolled.get("dice",s["dice"])
-            who=s["players"].get(rolled.get("pid"),{}).get("name","Last roll")
-            double="<b>DOUBLES</b>" if values[0]==values[1] else ""
-            st.markdown(f'<div class="roll-callout" role="status"><small>{esc(who)} · dice result</small><strong>{values[0]} + {values[1]} = {sum(values)}</strong>{double}</div>',unsafe_allow_html=True)
-        if s.get("clock"):
-            clock=s["clock"];left=max(0,int(clock["deadline"]-time.time()))
-            st.caption(f"⏱ {s['players'][clock['pid']]['name']} · {clock['kind']} decision · about {left}s remaining · {s['players'][clock['pid']].get('missed_decisions',0)}/{engine.room_rules(s)['miss_limit']} misses")
-        controls(service,s,version,pid)
-        if s["status"]!="finished" and not s["players"][pid]["bankrupt"]:
-            if st.button("declare bankrupcy",key="leave_game",use_container_width=True):
-                open_desk("leave")
-        st.divider()
-        players(s)
-        if s["status"]=="playing":
-            for incoming in s["trades"]:
-                if incoming["to"]==pid:
-                    st.info(("🤝 Counteroffer from " if incoming.get("counter_of") else "🤝 Trade offer from ")+s["players"][incoming["from"]]["name"])
-                    if st.button("Review incoming trade",key="incoming_"+incoming["id"],use_container_width=True):
-                        open_desk("review",trade_id=incoming["id"])
-            t1,t2=st.tabs(["Your portfolio","Deals"])
-            with t1:
-                portfolio(service,s,version,pid)
-            with t2:
-                trade_ui(service,s,version,pid)
-        room_settings(service,s,version,pid)
-        admin_controls(service,s,version,pid)
-        with st.expander("Invite & reconnect"):
-            base=os.environ.get("PUBLIC_APP_URL") or settings.get("PUBLIC_APP_URL","")
-            st.code((base.rstrip('/') if base else "")+"/?room="+c["code"],language=None)
-            st.caption("Share this invitation or the room code. Your recovery key below is private; it controls your seat.")
-            st.text_input("Private recovery key",value=c["session"],type="password",key="private_key")
-            st.caption("Your seat stays saved when you switch tables. Open this invitation again to return.")
-            if st.button("Create or join another table",use_container_width=True):
-                leave_view()
-                st.rerun()
-        with st.expander("How to play"):
-            st.write(f"Start with £{engine.room_rules(s)['starting_cash']}. Buy or auction every unowned property you land on. Rent, taxes and card payments settle automatically. Complete a colour group to build evenly. There are 32 houses and 12 hotels. Mortgage property or sell buildings to raise funds. Negotiate trades through Deals. The last solvent player wins.")
-            st.caption("See Room rules & timers for this table’s GO, tax, jail, Free Parking, building and clock settings. No player loans or rent immunity deals.")
-            st.markdown("[Classic rules reference](https://instructions.hasbro.com/en-gb/instruction/monopoly-game)")
-        st.caption(f"{backend.label} · State {version} · Live sync every 0.75 seconds")
+
+@st.fragment
+def table_tools():
+    c=st.session_state.get("credentials")
+    if not c or not backend:
+        return
+    service=Service(backend)
+    try:
+        s,version,pid=service.read(c["code"],c["session"])
+    except (engine.RuleError,StorageError) as e:
+        st.warning(str(e))
+        return
+    if st.session_state.get("notice"):
+        st.warning(st.session_state.notice)
+    room_settings(service,s,version,pid)
+    admin_controls(service,s,version,pid)
+    with st.expander("Invite & reconnect"):
+        base=os.environ.get("PUBLIC_APP_URL") or settings.get("PUBLIC_APP_URL","")
+        st.code((base.rstrip('/') if base else "")+"/?room="+c["code"],language=None)
+        st.caption("Share this invitation or room code. Your recovery key controls your seat; keep it private.")
+        st.text_input("Private recovery key",value=c["session"],type="password",key="private_key")
+        if st.button("Create or join another table",key="switch_live_table",use_container_width=True):
+            leave_view()
+            st.rerun()
+    with st.expander("How to play"):
+        st.write("Buy streets, collect rent, complete colour groups and build houses or hotels. Use the property desk to mortgage or manage buildings. Negotiate offers and counteroffers in the trade room. The last solvent player wins.")
+        st.caption("Room rules & timers lists this table's settings. Decisions continue counting down while personal windows are open.")
 
 
 game()
-if st.session_state.get("active_desk"):
-    desk(*st.session_state.active_desk)
+table_tools()
 st.caption("An independent fan-made property game. MONOPOLY is a trademark of Hasbro. No affiliation or endorsement. Original visual design; no supplied board artwork is redistributed.")
 
 

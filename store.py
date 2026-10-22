@@ -186,8 +186,18 @@ class Service:
             raise Conflict("The table changed. Review the latest state and try again.")
         record["payload"]["state"]=engine.apply(record["payload"]["state"],pid,action,**args)
         result=self.backend.commit(code,version,record["payload"],action_id)
-        self._record=None
+        # Only an acknowledged new commit can supply an immediate UI response.
+        # Duplicate receipts must fetch the actual state instead of guessing it.
+        self._record=dict(version=version+1,payload=record["payload"]) if result=="ok" else None
+        self._code=code
         return result
+
+    def committed_view(self,session):
+        """Authenticated result for this action; subsequent polls still read storage."""
+        if self._record is None:
+            return None
+        pid=self.authenticate(self._record,session)
+        return copy.deepcopy(self._record["payload"]["state"]),self._record["version"],pid
 
 
 @lru_cache(maxsize=4)

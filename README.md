@@ -38,15 +38,37 @@ GO and backwards for card moves, rather than sliding diagonally across the board
 The activity feed uses icons and categories for rolls, purchases, rent, trades,
 auctions, buildings and bankruptcy. Existing saved rooms remain compatible.
 
-Dice results show the roller, both values, the total and a doubles label above the board and beside turn controls. Buttons depress on click; submitted desk actions show a saving state and block duplicate clicks. Trade sliders, property selection and counteroffer drafting update locally without rerunning Python.
-Only submitting an offer changes shared state. Property actions refresh their
-own window. Background board polling pauses while a personal window is open
-and resumes on dismissal, so it cannot interrupt an edit. Submitting still
-checks the current database version; a stale offer or action must be reviewed
-and retried. HTTP connections are reused per server thread, and action commits
-reuse the authenticated render snapshot while retaining database version checks.
-Turn-action callbacks commit before the automatic fragment render, avoiding the old extra rerun and database read. Component height messages are sent only when the height changes. Streamlit still redraws the game fragment after server actions; a zero-rerun client would require a separate frontend/API architecture. No player setting is needed for these improvements. The 0.75-second poll interval is a target, not a network latency guarantee;
-hosting load and distance from Supabase still affect responsiveness.
+Dice results show the roller, both values, the total and a doubles label.
+The board, turn controls, balances, property collection and deal list now share
+one persistent browser surface. Polls update it in place only when the room
+version changes. Unchanged polls do not recreate buttons, forms, history rows
+or token elements. The local countdown updates once per displayed second.
+
+Property desks, trade drafts, reviews, counteroffers and leave confirmations
+open locally, without a Python rerun or extra database read. Background sync
+continues while they are open. Trade drafts retain their cash amounts and deed
+selections when another player acts; a refresh-choices button can reload the
+available properties without clearing the draft. Closing a draft sends nothing.
+Buttons depress immediately and show Saving while a submitted action is pending.
+The server still authenticates the player, validates every action and checks
+the shared version atomically. Conflicts refresh the table and keep a failed
+draft open for review; no speculative money, dice or ownership changes are shown.
+
+Action callbacks commit before the automatic fragment run. A newly acknowledged
+commit supplies the immediate response without a second database round trip;
+the next poll reads the database normally so opponents' moves are still seen.
+Duplicate receipts never predict a new state. HTTP connections are reused per
+server thread. Native host settings, admin tools and recovery controls live in
+a separate fragment that is not rebuilt by the play timer.
+
+Streamlit still executes a small server fragment for synchronization and actions;
+it no longer reconstructs the visible play interface after each ordinary action.
+Creating, joining, changing table and starting/finishing a game can still rerun
+the outer app. A truly push-driven client would require a separate API/frontend
+deployment. No hosting migration or player setting is required for this update.
+The 0.75-second poll interval is a target, not a latency guarantee: hosting load,
+network distance and database response time still affect saved-move latency.
+When updates stop, a reconnecting indicator preserves the last visible board.
 
 ## Room rules, clocks and admin mode
 
@@ -184,8 +206,8 @@ winner using legal actions. Test participants are not exposed as AI opponents.
 
 ## Files
 
-- `app.py`: Streamlit screens, lobby, actions, portfolio, trades, live polling.
-- `ui.py`: original HTML/CSS/JS board, animation, browser recovery bridge.
+- `app.py`: Streamlit entry forms, authenticated action callbacks, live polling and host tools.
+- `ui.py`: persistent HTML/CSS/JS play surface, local desks, animation and recovery bridge.
 - `engine.py`: server-authoritative rules and invariant checks.
 - `data.py`: London board, rents, building prices, card effects.
 - `store.py`: Supabase and local SQLite backends, membership and action service.

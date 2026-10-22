@@ -163,3 +163,40 @@ def test_service_unlock_and_power_use_the_authenticated_host(tmp_path):
     assert result['admin_enabled']
     assert not any('676767' in event for event in result['events'])
 
+
+def test_confirmed_action_returns_authenticated_detached_snapshot_without_read(tmp_path,monkeypatch):
+    backend=SQLiteBackend(tmp_path/'instant.db');service=Service(backend)
+    host=service.create('Host','🚗')
+    _,v,_=service.read(host['code'],host['session'])
+    def no_extra_read(code):
+        raise AssertionError('A confirmed move must not need a second database round trip.')
+    monkeypatch.setattr(backend,'read',no_extra_read)
+    assert service.act(host['code'],host['session'],v,'e'*32,'ready')=='ok'
+    state,version,pid=service.committed_view(host['session'])
+    assert version==v+1 and pid==host['pid'] and state['players'][pid]['ready']
+    state['players'][pid]['money']=0
+    assert service.committed_view(host['session'])[0]['players'][pid]['money']==1500
+    with pytest.raises(e.RuleError):service.committed_view('invalid-session-key-long-enough')
+
+
+def test_next_poll_reads_a_newer_opponent_commit(tmp_path):
+    backend=SQLiteBackend(tmp_path/'fresh.db');first=Service(backend)
+    host=first.create('Host','🚗');guest=first.join(host['code'],'Guest','🎩')
+    _,v,_=first.read(host['code'],host['session'])
+    first.act(host['code'],host['session'],v,'f'*32,'ready')
+    second=Service(backend);_,other_v,_=second.read(guest['code'],guest['session'])
+    second.act(guest['code'],guest['session'],other_v,'a'*32,'ready')
+    state,new_v,_=first.read(host['code'],host['session'])
+    assert new_v==v+2 and state['players'][guest['pid']]['ready']
+
+
+def test_duplicate_receipt_never_predicts_a_new_version(tmp_path):
+    backend=SQLiteBackend(tmp_path/'receipt.db');service=Service(backend)
+    host=service.create('Host','🚗');_,v,_=service.read(host['code'],host['session'])
+    service.act(host['code'],host['session'],v,'b'*32,'ready')
+    _,current,_=service.read(host['code'],host['session'])
+    assert service.act(host['code'],host['session'],current,'b'*32,'ready')=='duplicate'
+    assert service.committed_view(host['session']) is None
+    state,final,_=service.read(host['code'],host['session'])
+    assert final==current and state['players'][host['pid']]['ready']
+

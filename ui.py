@@ -19,6 +19,9 @@ button.clicked{animation:clicked .45s ease-out}button.busy{background:#dce8d6;co
 #wrap[data-motion=steps] .token,#wrap[data-motion=instant] .token{transition:none!important}
 
 .clock-banner{display:flex;justify-content:space-between;gap:12px;background:#e8efdf;border:1px solid #bdcfac;padding:11px 14px;border-radius:10px;margin-bottom:10px;font-size:12px}.clock-banner strong{font:700 23px Georgia;white-space:nowrap}.clock-banner.urgent{background:#fff0d6;border-color:#c68c3d}.portfolio-note{font-size:12px;color:#46653e;margin:0 0 10px;min-height:18px}.square.portfolio-highlight{box-shadow:inset 0 0 0 3px var(--portfolio-color,#d3a42d);background:#fff0b8!important;opacity:1!important;z-index:3}#board.highlighting .square:not(.portfolio-highlight){opacity:.40}.seat[aria-pressed=true]{box-shadow:0 0 0 2px var(--c);background:#f6ebcb}.bar select{max-width:150px}
+
+#wrap{position:relative}.table-grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(280px,1fr);gap:26px;align-items:start}.table-board,.table-rail{min-width:0}.table-rail{display:grid;gap:18px}.play-controls,.balances,.live-trades{background:#fffdf5;border:1px solid var(--line);border-radius:13px;padding:17px}.play-controls h2{font:700 25px Georgia;margin:14px 0}.play-controls .action,.live-trades>.action{display:block;width:100%;margin-top:9px}.play-controls select,.bid-field input{width:100%;background:#f4f6ea;border:1px solid var(--line);border-radius:8px;padding:10px}.bid-field{display:block;font-size:12px;margin:10px 0}.bid-field input{display:block;margin-top:6px}.bid-total{font:700 31px Georgia}.last-card,.offer-card{background:#edf1e5;border-radius:9px;padding:12px;margin-top:13px;font-size:12px}.offer-card .action{width:100%}.balance-row{display:grid;grid-template-columns:30px 1fr auto;gap:5px 9px;width:100%;border-left:5px solid var(--c);text-align:left;margin-top:8px;padding:10px}.balance-row small{grid-column:2/4;font-size:10px;color:var(--muted);font-weight:400}.balance-row.current{box-shadow:0 0 0 2px #c3d1ac}.balance-avatar{font-size:24px;grid-row:1/3}.sync-line{font-size:11px;color:#6a8069;min-height:24px;margin-bottom:8px}.sync-line.delayed{color:#ad6b29}.saving{opacity:1;pointer-events:auto}.saving button[data-server-action]{cursor:wait}.saving .busy{opacity:.8}.local-desk{position:absolute;top:0;left:0;right:0;background:#fffdf5;border:2px solid #6a876b;border-radius:15px;padding:20px;z-index:60;box-shadow:0 15px 90px #173b3077;max-width:930px;margin:auto}.desk-top{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:18px}.local-desk-body{max-height:620px;overflow:auto;overscroll-behavior:contain;padding:3px}.local-desk .trade-cols{gap:14px}.table-grid[inert]{opacity:.45}.table-rail .property-grid{grid-template-columns:1fr 1fr}.table-rail .property-tile{font-size:12px;padding:10px}.table-rail .section{margin-top:0}.table-rail .sectionhead h3{font-size:19px}.table-rail .sectionhead .quiet{font-size:10px}
+@media(max-width:820px){.table-grid{grid-template-columns:1fr;gap:16px}.table-rail{grid-template-columns:1fr 1fr;gap:12px}.play-controls,.balances,.live-trades{padding:12px}.local-desk{padding:12px}.local-desk-body{max-height:560px}}@media(max-width:520px){.table-rail{grid-template-columns:1fr}.local-desk-body{max-height:500px}.dialog-actions{flex-wrap:wrap}.dialog-actions button{flex:1}}
 </style></head><body><div id="wrap"></div><script>
 const post=(type,more={})=>parent.postMessage({isStreamlitMessage:true,type,...more},'*');
 const send=value=>post('streamlit:setComponentValue',{value,dataType:'json'});
@@ -26,7 +29,8 @@ const el=(tag,cls,text)=>{let n=document.createElement(tag);if(cls)n.className=c
 const money=n=>'£'+Number(n).toLocaleString('en-GB');
 let args={},booted=false,lastRoom=null,lastSeq=null,lastRoll=null,tokenNodes={},tokenPositions={},moveQueues={},moving={},lastRevision=null,modeBuilt=null,pending=null,tradeDraft=null,counterId=null,lastHeight=null,selectedPortfolio=null,hoveredPortfolio=null,serverOffset=0;
 const faces=['','⚀','⚁','⚂','⚃','⚄','⚅'];
-const wrap=document.getElementById('wrap');
+let wrap=document.getElementById('wrap');
+const surface=wrap;
 function highlightPortfolio(pid=hoveredPortfolio||selectedPortfolio){
     let board=document.getElementById('board');if(!board)return;
     let valid=pid&&args.state.players[pid];board.classList.toggle('highlighting',!!valid);
@@ -41,6 +45,7 @@ function updateClock(){
     if(!c){n?.remove();return}
     if(!n){n=el('div','clock-banner');n.id='clock-banner';n.setAttribute('role','timer');wrap.prepend(n)}
     let left=Math.max(0,Math.ceil((c.deadline*1000-Date.now()-serverOffset)/1000));
+    let clockText=JSON.stringify([c,left,args.state.players[c.pid]?.missed_decisions]);if(n.dataset.clock===clockText)return;n.dataset.clock=clockText;
     n.classList.toggle('urgent',left<=10);
     let player=args.state.players[c.pid],missed=player?.missed_decisions||0;
     let label=el('span','',(player?.token||'')+' '+(player?.name||'Player')+' · '+c.kind+' decision · '+missed+'/'+(args.rules?.miss_limit||2)+' misses');
@@ -61,7 +66,7 @@ const bdata=i=>args.board.find(b=>b.id===Number(i));
 const held=pid=>args.board.filter(b=>args.state.deeds[String(b.id)]?.owner===pid);
 const me=()=>args.state.players[args.pid];
 const colorFor=b=>args.colors[b.group]||'#afc3a8';
-function height(){let h=Math.ceil(wrap.getBoundingClientRect().height)+6;if(h!==lastHeight){lastHeight=h;post('streamlit:setFrameHeight',{height:h})}}
+function height(){let h=Math.ceil(surface.getBoundingClientRect().height)+6;if(h!==lastHeight){lastHeight=h;post('streamlit:setFrameHeight',{height:h})}}
 function openDesk(mode,more={}){send({type:'desk',mode,...more,nonce:crypto.randomUUID()})}
 function action(name,values={}){if(pending)return;let clicked=document.activeElement;if(clicked?.tagName==='BUTTON'){clicked.dataset.label=clicked.textContent;clicked.classList.add('busy');clicked.setAttribute('aria-busy','true');clicked.textContent='◌ Saving…';}pending=crypto.randomUUID();wrap.classList.add('saving');let status=document.getElementById('status');if(status)status.textContent='Saving your move…';send({type:'action',action:name,args:values,version:args.version,nonce:pending})}
 document.addEventListener('pointerdown',e=>{let b=e.target.closest('button');if(b&&!b.disabled)b.classList.add('pressed')});
@@ -113,10 +118,171 @@ function propertyDesk(){wrap.replaceChildren();let b=bdata(args.property),d=args
 function cashSlider(label,balance,value,change){let box=el('div','money-box'),heading=el('div','money-heading'),input=el('input');input.type='number';input.min=0;input.max=balance;input.value=Math.min(value,balance);input.setAttribute('aria-label',label+' amount');heading.append(el('span','',label),input);let range=el('input');range.type='range';range.min=0;range.max=Math.max(balance,1);range.step=1;range.value=input.value;range.disabled=balance===0;range.setAttribute('aria-label',label+' slider');function update(raw){let v=Math.max(0,Math.min(balance,Math.round(Number(raw)||0)));input.value=range.value=v;change(v)}input.oninput=()=>update(input.value);range.oninput=()=>update(range.value);let ends=el('div','money-extents');ends.append(el('span','','£0'),el('span','',money(balance)+' available'));box.append(heading,range,ends);return box}
 function updateRedeemOptions(){let box=document.getElementById('redeem-choices');if(!box||!tradeDraft)return;box.replaceChildren();let mortgages=tradeDraft.take.filter(i=>args.state.deeds[String(i)]?.mortgaged);tradeDraft.redeem=tradeDraft.redeem.filter(i=>mortgages.includes(i));mortgages.forEach(i=>{let label=el('label','choice'),input=el('input');input.type='checkbox';input.checked=tradeDraft.redeem.includes(i);input.onchange=()=>{tradeDraft.redeem=input.checked?[...tradeDraft.redeem,i]:tradeDraft.redeem.filter(j=>j!==i)};label.append(input,el('span','','Redeem '+bdata(i).name+' now for '+money(Math.floor(bdata(i).price/2*1.1))));box.append(label)})}
 function tradeSummary(){updateRedeemOptions();let summary=document.getElementById('trade-summary');if(!summary)return;let net=tradeDraft.take_cash-tradeDraft.give_cash;summary.replaceChildren(el('span','','You give '+tradeDraft.give.length+' deed'+(tradeDraft.give.length===1?'':'s')+' + '+money(tradeDraft.give_cash)),el('strong','',net===0?'No net cash':net>0?'You receive '+money(net):'You pay '+money(-net)),el('span','','You receive '+tradeDraft.take.length+' deed'+(tradeDraft.take.length===1?'':'s')+' + '+money(tradeDraft.take_cash)))}
-function tradeComposer(rebuild=false){let s=args.state,others=s.order.filter(q=>q!==args.pid&&!s.players[q].bankrupt);if(!others.length){wrap.replaceChildren(el('div','empty','There are no other active players to trade with.'));height();return}if(!tradeDraft||!others.includes(tradeDraft.to))tradeDraft={to:others[0],give:[],take:[],give_cash:0,take_cash:0,give_cards:[],take_cards:[],redeem:[]};wrap.replaceChildren();let shell=el('div','dialog-shell'),head=el('div','trade-head'),select=el('select');select.setAttribute('aria-label','Trade with');others.forEach(pid=>{let o=el('option','',s.players[pid].token+' '+s.players[pid].name);o.value=pid;select.append(o)});select.value=tradeDraft.to;select.onchange=()=>{tradeDraft.to=select.value;tradeDraft.take=[];tradeDraft.take_cash=0;tradeDraft.take_cards=[];tradeDraft.redeem=[];tradeComposer(true)};select.disabled=!!counterId;head.append(el('h2','',counterId?'Make a counteroffer':'Make a deal'),select);shell.append(head,el('p','dialog-intro','Choose deeds and move the sliders. Nothing is sent until you submit. When countering, the original offer stays open until your counteroffer is sent.'));let cols=el('div','trade-cols');[['give',args.pid,'You give','you'],['take',tradeDraft.to,'You receive','them']].forEach(([direction,pid,label,cls])=>{let side=el('div','trade-side');side.append(el('h3',cls,label),el('span','quiet',s.players[pid].token+' '+s.players[pid].name));tradeDraft[direction+'_cash']=Math.min(tradeDraft[direction+'_cash'],s.players[pid].money);side.append(cashSlider(direction==='give'?'Cash you give':'Cash you receive',s.players[pid].money,tradeDraft[direction+'_cash'],v=>{tradeDraft[direction+'_cash']=v;tradeSummary()}));side.append(el('div','eyebrow','Select properties'));let choices=el('div','chooser'),properties=held(pid);if(!properties.length)choices.append(el('div','empty','No properties yet.'));properties.forEach(b=>{let blocked=args.board.some(j=>j.group&&j.group===b.group&&s.deeds[String(j.id)]?.level>0);choices.append(choice(b,tradeDraft[direction].includes(b.id),checked=>{tradeDraft[direction]=checked?[...tradeDraft[direction],b.id]:tradeDraft[direction].filter(i=>i!==b.id);tradeSummary()},blocked))});side.append(choices);if(direction==='take'){let redeem=el('div');redeem.id='redeem-choices';side.append(redeem)}(s.players[pid].cards||[]).forEach(deck=>{let n=el('label','choice'),input=el('input');input.type='checkbox';input.checked=tradeDraft[direction+'_cards'].includes(deck);input.onchange=()=>{tradeDraft[direction+'_cards']=input.checked?[...tradeDraft[direction+'_cards'],deck]:tradeDraft[direction+'_cards'].filter(x=>x!==deck)};n.append(input,el('span','',deck+' jail card'));side.append(n)});cols.append(side)});shell.append(cols);let summary=el('div','trade-summary');summary.id='trade-summary';shell.append(summary,el('div','mortgage-note','Sell all buildings in a colour set before trading its deeds. Incoming mortgages charge 10% interest; you can redeem them later through the property desk.'));let controls=el('div','dialog-actions');controls.append(button(counterId?'Send counteroffer →':'Send offer →',()=>action(counterId?'counteroffer':'offer',{...tradeDraft,...(counterId?{id:counterId}:{})}),'primary'));if(counterId)controls.prepend(button('Back to original offer',()=>{counterId=null;tradeDraft=null;modeBuilt='review';reviewTrade()}));shell.append(controls);let status=el('div','status',args.feedback||'');status.id='status';shell.append(status);wrap.append(shell);tradeSummary();height()}
-function reviewTrade(){wrap.replaceChildren();let reviewRedeem=[];let t=args.trade;if(!t){wrap.append(el('div','empty','This offer is no longer open.'));height();return}let shell=el('div','dialog-shell'),received=t.to===args.pid;let sides=received?[['give',t.from,'You receive'],['take',t.to,'You give']]:[['give',t.from,'You give'],['take',t.to,'You receive']];shell.append(el('h2','',t.counter_of?'Counteroffer':'Trade offer'),el('p','dialog-intro',args.state.players[t.from].name+' → '+args.state.players[t.to].name));let cols=el('div','trade-cols');sides.forEach(([key,pid,label])=>{let n=el('div','trade-side');n.append(el('h3','',label),el('div','fact',money(t[key+'_cash'])));t[key].forEach(i=>n.append(choice(bdata(i),true,()=>{},true)));t[key+'_cards'].forEach(deck=>n.append(el('div','cardline',deck+' jail card')));cols.append(n)});shell.append(cols);if(received){t.give.filter(i=>args.state.deeds[String(i)].mortgaged).forEach(i=>{let label=el('label','choice'),input=el('input');input.type='checkbox';input.onchange=()=>{reviewRedeem=input.checked?[...reviewRedeem,i]:reviewRedeem.filter(j=>j!==i)};label.append(input,el('span','','Redeem '+bdata(i).name+' now for '+money(Math.floor(bdata(i).price/2*1.1))));shell.append(label)})}shell.append(el('p','mortgage-note','Mortgaged deeds stay mortgaged on acceptance and charge 10% interest to the recipient.'));let actions=el('div','dialog-actions');if(received){actions.append(button('Decline',()=>action('reject',{id:t.id})),button('Counteroffer',()=>{counterId=t.id;tradeDraft={to:t.from,give:[...t.take],take:[...t.give],give_cash:t.take_cash,take_cash:t.give_cash,give_cards:[...t.take_cards],take_cards:[...t.give_cards],redeem:[]};modeBuilt='counter';tradeComposer()}),button('Accept trade',()=>action('accept',{id:t.id,redeem:reviewRedeem}),'primary'))}else actions.append(button('Cancel offer',()=>action('cancel',{id:t.id})));shell.append(actions);let status=el('div','status',args.feedback||'');status.id='status';shell.append(status);wrap.append(shell);height()}
+function tradeComposer(rebuild=false){let s=args.state,others=s.order.filter(q=>q!==args.pid&&!s.players[q].bankrupt);if(!others.length){wrap.replaceChildren(el('div','empty','There are no other active players to trade with.'));height();return}if(!tradeDraft||!others.includes(tradeDraft.to))tradeDraft={to:others[0],give:[],take:[],give_cash:0,take_cash:0,give_cards:[],take_cards:[],redeem:[]};wrap.replaceChildren();let shell=el('div','dialog-shell'),head=el('div','trade-head'),select=el('select');select.setAttribute('aria-label','Trade with');others.forEach(pid=>{let o=el('option','',s.players[pid].token+' '+s.players[pid].name);o.value=pid;select.append(o)});select.value=tradeDraft.to;select.onchange=()=>{tradeDraft.to=select.value;tradeDraft.take=[];tradeDraft.take_cash=0;tradeDraft.take_cards=[];tradeDraft.redeem=[];(args.persistent?redrawDesk():tradeComposer(true))};select.disabled=!!counterId;head.append(el('h2','',counterId?'Make a counteroffer':'Make a deal'),select);shell.append(head,el('p','dialog-intro','Choose deeds and move the sliders. Nothing is sent until you submit. When countering, the original offer stays open until your counteroffer is sent.'));let cols=el('div','trade-cols');[['give',args.pid,'You give','you'],['take',tradeDraft.to,'You receive','them']].forEach(([direction,pid,label,cls])=>{let side=el('div','trade-side');side.append(el('h3',cls,label),el('span','quiet',s.players[pid].token+' '+s.players[pid].name));tradeDraft[direction+'_cash']=Math.min(tradeDraft[direction+'_cash'],s.players[pid].money);side.append(cashSlider(direction==='give'?'Cash you give':'Cash you receive',s.players[pid].money,tradeDraft[direction+'_cash'],v=>{tradeDraft[direction+'_cash']=v;tradeSummary()}));side.append(el('div','eyebrow','Select properties'));let choices=el('div','chooser'),properties=held(pid);if(!properties.length)choices.append(el('div','empty','No properties yet.'));properties.forEach(b=>{let blocked=args.board.some(j=>j.group&&j.group===b.group&&s.deeds[String(j.id)]?.level>0);choices.append(choice(b,tradeDraft[direction].includes(b.id),checked=>{tradeDraft[direction]=checked?[...tradeDraft[direction],b.id]:tradeDraft[direction].filter(i=>i!==b.id);tradeSummary()},blocked))});side.append(choices);if(direction==='take'){let redeem=el('div');redeem.id='redeem-choices';side.append(redeem)}(s.players[pid].cards||[]).forEach(deck=>{let n=el('label','choice'),input=el('input');input.type='checkbox';input.checked=tradeDraft[direction+'_cards'].includes(deck);input.onchange=()=>{tradeDraft[direction+'_cards']=input.checked?[...tradeDraft[direction+'_cards'],deck]:tradeDraft[direction+'_cards'].filter(x=>x!==deck)};n.append(input,el('span','',deck+' jail card'));side.append(n)});cols.append(side)});shell.append(cols);let summary=el('div','trade-summary');summary.id='trade-summary';shell.append(summary,el('div','mortgage-note','Sell all buildings in a colour set before trading its deeds. Incoming mortgages charge 10% interest; you can redeem them later through the property desk.'));let controls=el('div','dialog-actions');controls.append(button(counterId?'Send counteroffer →':'Send offer →',()=>action(counterId?'counteroffer':'offer',{...tradeDraft,...(counterId?{id:counterId}:{})}),'primary'));if(counterId)controls.prepend(button('Back to original offer',()=>{counterId=null;tradeDraft=null;modeBuilt='review';(args.persistent?redrawDesk():reviewTrade())}));shell.append(controls);let status=el('div','status',args.feedback||'');status.id='status';shell.append(status);wrap.append(shell);tradeSummary();height()}
+function reviewTrade(){wrap.replaceChildren();let t=args.trade;if(!t){wrap.append(el('div','empty','This offer is no longer open.'));height();return}let shell=el('div','dialog-shell'),received=t.to===args.pid;let sides=received?[['give',t.from,'You receive'],['take',t.to,'You give']]:[['give',t.from,'You give'],['take',t.to,'You receive']];shell.append(el('h2','',t.counter_of?'Counteroffer':'Trade offer'),el('p','dialog-intro',args.state.players[t.from].name+' → '+args.state.players[t.to].name));let cols=el('div','trade-cols');sides.forEach(([key,pid,label])=>{let n=el('div','trade-side');n.append(el('h3','',label),el('div','fact',money(t[key+'_cash'])));t[key].forEach(i=>n.append(choice(bdata(i),true,()=>{},true)));t[key+'_cards'].forEach(deck=>n.append(el('div','cardline',deck+' jail card')));cols.append(n)});shell.append(cols);if(received){t.give.filter(i=>args.state.deeds[String(i)].mortgaged).forEach(i=>{let label=el('label','choice'),input=el('input');input.type='checkbox';input.checked=reviewRedeem.includes(i);input.onchange=()=>{reviewRedeem=input.checked?[...reviewRedeem,i]:reviewRedeem.filter(j=>j!==i)};label.append(input,el('span','','Redeem '+bdata(i).name+' now for '+money(Math.floor(bdata(i).price/2*1.1))));shell.append(label)})}shell.append(el('p','mortgage-note','Mortgaged deeds stay mortgaged on acceptance and charge 10% interest to the recipient.'));let actions=el('div','dialog-actions');if(received){actions.append(button('Decline',()=>action('reject',{id:t.id})),button('Counteroffer',()=>{counterId=t.id;tradeDraft={to:t.from,give:[...t.take],take:[...t.give],give_cash:t.take_cash,take_cash:t.give_cash,give_cards:[...t.take_cards],take_cards:[...t.give_cards],redeem:[]};modeBuilt='counter';(args.persistent?redrawDesk():tradeComposer())}),button('Accept trade',()=>action('accept',{id:t.id,redeem:reviewRedeem}),'primary'))}else actions.append(button('Cancel offer',()=>action('cancel',{id:t.id})));shell.append(actions);let status=el('div','status',args.feedback||'');status.id='status';shell.append(status);wrap.append(shell);height()}
 function leaveDesk(){wrap.replaceChildren();let n=el('div','leave-box');n.append(el('h2','','Leave this game?'),el('p','',args.state.status==='lobby'?'Your seat will be removed from the lobby. If you are the host, the next player becomes host.':'Declaring bankruptcy forfeits your seat permanently. If you owe a player money, your assets go to that player; otherwise your properties return to the bank for auction. The remaining players continue.'),button('Confirm bankruptcy and leave',()=>action('resign'),'danger'));let status=el('div','status',args.feedback||'');status.id='status';n.append(status);wrap.append(n);height()}
-window.addEventListener('message',e=>{if(e.source!==parent||e.data.type!=='streamlit:render')return;args=e.data.args||{};serverOffset=(args.server_now||Date.now()/1000)*1000-Date.now();let mode=args.mode||'board';if(args.ack===pending){pending=null;wrap.classList.remove('saving');document.querySelectorAll('button.busy').forEach(b=>{b.classList.remove('busy');b.removeAttribute('aria-busy');if(b.dataset.label)b.textContent=b.dataset.label})}if(mode==='board'){try{if(args.credentials){localStorage.setItem('london-session-'+args.credentials.code,JSON.stringify(args.credentials));localStorage.setItem('london-last-room',args.credentials.code)}if(args.clear)localStorage.removeItem('london-last-room')}catch{}if(!booted){booted=true;let saved=null;try{let code=args.invite||localStorage.getItem('london-last-room');saved=JSON.parse(localStorage.getItem('london-session-'+code)||'null')}catch{}send({type:'restore',credentials:saved,nonce:crypto.randomUUID()})}renderBoard()}else if(!pending){if(mode==='property')propertyDesk();else if(mode==='trade'){if(modeBuilt!=='trade')tradeComposer();else if(args.feedback){let status=document.getElementById('status');if(status)status.textContent=args.feedback}}else if(mode==='review'){if(modeBuilt==='counter'&&args.trade){let status=document.getElementById('status');if(status)status.textContent=args.feedback||'';document.querySelectorAll('button.busy').forEach(b=>{b.classList.remove('busy');b.removeAttribute('aria-busy');b.textContent='Send counteroffer →'})}else reviewTrade();}else if(mode==='leave')leaveDesk();if(modeBuilt!=='counter')modeBuilt=mode}statusBanners();height()});
+// Persistent play surface. Only server-confirmed state changes redraw panels.
+let localDesk=null,deskReturnFocus=null,receivedAt=0,lastClockText='',reviewRedeem=[];
+const originalBuildBoard=buildBoard;
+buildBoard=function(){
+  originalBuildBoard();
+  if(!args.persistent)return;
+  let grid=el('div','table-grid'),main=el('div','table-board'),rail=el('aside','table-rail');
+  [...wrap.children].forEach(n=>main.append(n));
+  let controls=el('section','play-controls');controls.id='play-controls';
+  let players=el('section','balances');players.id='balances';
+  let trades=el('section','live-trades');trades.id='live-trades';
+  rail.append(controls,players,trades,main.querySelector('#portfolio'));
+  grid.append(main,rail);wrap.append(grid);
+  let sync=el('div','sync-line');sync.id='sync-line';sync.setAttribute('role','status');wrap.prepend(sync);
+};
+function playButton(parent,label,name,values={},disabled=false,primary=false){
+  let n=button(label,()=>action(name,values),primary?'primary':'');n.disabled=disabled;
+  n.dataset.serverAction=name;parent.append(n);return n;
+}
+function playControls(){
+  let n=document.getElementById('play-controls');if(!n)return;n.replaceChildren();
+  let s=args.state,p=me(),pid=args.pid,t=s.queue[0],a=s.auction,r=s.building_request;
+  n.append(el('div','eyebrow','ROOM '+args.room+' · '+s.order.length+'/6 seats'));
+  const title=text=>n.append(el('h2','',text));const note=text=>n.append(el('p','quiet',text));
+  if(s.status==='finished'){title('🏆 '+s.players[s.winner].name+' wins!');return}
+  if(p.bankrupt){title('At the table');note('You are spectating. Your friends’ turns still update here.');return}
+  if(s.status==='lobby'){
+    title('Make yourself at home');s.order.forEach(q=>note(s.players[q].token+' '+s.players[q].name+' · '+(s.players[q].ready?'✓ ready':'choosing a seat')));
+    playButton(n,p.ready?'Not ready':'✓ Ready','ready',{},false,true);
+    if(pid===s.host)playButton(n,'Start the game','start',{},s.order.length<2||!s.order.every(q=>s.players[q].ready));
+    else note('The host starts when everyone is ready.');
+  }else if(a){
+    title('Going once, going twice…');note(a.targets!==null?'Building auction':bdata(a.property).name);
+    n.append(el('div','bid-total',money(a.bid)));note(a.leader?s.players[a.leader].name+' leads':'No bids yet');
+    if(a.eligible.includes(pid)&&!a.passed.includes(pid)){
+      let label=el('label','bid-field','Your bid (£)'),input=el('input');input.type='number';input.min=a.bid+1;input.step=1;
+      input.value=a.bid+1;input.setAttribute('aria-label','Your bid (£)');label.append(input);n.append(label);
+      let bid=button('Place bid',()=>action('bid',{amount:Number(input.value)}),'primary');bid.dataset.serverAction='bid';n.append(bid);
+      playButton(n,'Pass on this auction','pass',{},a.leader===pid);
+    }else note('Waiting for the remaining bidders.');
+    note('Still bidding: '+a.eligible.filter(q=>!a.passed.includes(q)&&q!==a.leader).map(q=>s.players[q].name).join(', '));
+  }else if(r){
+    title('Limited building supply');
+    if(r.eligible.includes(pid)&&!Object.hasOwn(r.responses,pid)){
+      let select=el('select');select.setAttribute('aria-label','Request a building for');
+      args.building_choices.forEach(i=>{let o=el('option','',bdata(i).name);o.value=i;select.append(o)});n.append(select);
+      let yes=button('Request building',()=>action('building_reply',{property:Number(select.value)}));yes.disabled=!args.building_choices.length;n.append(yes);
+      playButton(n,'No building for me','building_reply',{property:null});
+    }else note('Waiting for eligible owners to respond.');
+  }else if(t){
+    let who=s.players[t.pid]?.name||'Bank';
+    if(t.type==='purchase'){
+      let b=bdata(t.property);title(b.name);note('Available from the bank · '+money(b.price));
+      if(t.pid===pid){playButton(n,'Buy for '+money(b.price),'buy',{},p.money<b.price,true);playButton(n,args.rules.decline_auction?'Send to auction':'Decline purchase','decline')}
+      else note('Waiting for '+who+' to buy or decline.');
+    }else if(t.type==='pay'){
+      title(who+' owes '+money(t.amount));note(t.reason);
+      if(t.pid===pid){note('Raise cash using your properties or a trade. Payment settles automatically when you can afford it.');playButton(n,'Declare bankruptcy','bankrupt',{},args.liquid_value>=t.amount)}
+    }else if(t.type==='inherit'){
+      title('Inherited mortgage');note(who+' received '+bdata(t.property).name+'.');
+      if(t.pid===pid){let b=bdata(t.property);playButton(n,'Keep mortgage · '+money(Math.floor(b.price/20))+' interest','inherit',{mode:'keep'});playButton(n,'Redeem now · '+money(Math.floor(b.price/2*1.1)),'inherit',{mode:'redeem'})}
+    }
+  }else if(s.order[s.turn]===pid){
+    title('Your move');
+    if(p.jail&&s.stage==='roll'){
+      note('Jail attempt '+(p.jail_turns+1)+' of 3. Doubles release you without an extra roll.');
+      playButton(n,'Pay '+money(args.rules.jail_fine)+' to leave jail','jail_pay',{},p.money<args.rules.jail_fine);
+      p.cards.forEach(deck=>playButton(n,'Use '+deck+' jail card','jail_card',{deck}));
+    }
+    playButton(n,s.stage==='roll'?(p.jail?'🎲 Try for doubles':'🎲 Roll the dice'):'End turn →',s.stage==='roll'?'roll':'end',{},false,true);
+  }else{title(s.players[s.order[s.turn]].name+'’s turn');note('You can manage properties and propose trades between turns.')}
+  n.append(button('declare bankrupcy',()=>openDesk('leave'),'danger'));
+  if(s.last_card)n.append(el('div','last-card',s.last_card.deck+' · '+s.last_card.text));
+}
+function balances(){
+  let n=document.getElementById('balances');if(!n)return;n.replaceChildren(sectionTitle('At the table'));
+  let s=args.state;s.order.forEach((pid,i)=>{
+    let p=s.players[pid],row=button('',()=>{selectedPortfolio=selectedPortfolio===pid?null:pid;highlightPortfolio()},'balance-row');
+    row.style.setProperty('--c',args.player_colors[i]);row.setAttribute('aria-label','Highlight '+p.name+' portfolio');
+    row.append(el('span','balance-avatar',p.token),el('span','',p.name),el('strong','',money(p.money)));
+    row.append(el('small','',p.bankrupt?'Bankrupt · spectating':p.jail?'In jail':held(pid).length+' properties · '+p.cards.length+' jail cards'));
+    if(s.status==='playing'&&s.order[s.turn]===pid)row.classList.add('current');n.append(row);
+  });
+}
+function liveTrades(){
+  let n=document.getElementById('live-trades');if(!n)return;n.replaceChildren();let s=args.state;
+  if(s.status!=='playing'||me().bankrupt)return;n.append(sectionTitle('Deals'));
+  n.append(button('⇄ Open trade room',()=>openDesk('trade'),'primary'));
+  s.trades.forEach(t=>{let row=el('div','offer-card');row.append(el('strong','',(t.counter_of?'Counteroffer: ':'')+s.players[t.from].name+' → '+s.players[t.to].name));
+    row.append(el('p','quiet','Gives '+t.give.length+' deeds + '+money(t.give_cash)+' · Receives '+t.take.length+' deeds + '+money(t.take_cash)));
+    row.append(button(t.to===args.pid?'Review incoming trade':'View your offer',()=>openDesk('review',{trade_id:t.id})));n.append(row);
+  });
+}
+function closeLocalDesk(){
+  if(pending)return;document.getElementById('local-desk')?.remove();document.querySelector('.table-grid')?.removeAttribute('inert');
+  localDesk=null;tradeDraft=null;counterId=null;modeBuilt=null;reviewRedeem=[];
+  if(deskReturnFocus?.isConnected)deskReturnFocus.focus({preventScroll:true});height();
+}
+const oldOpenDesk=openDesk;
+openDesk=function(mode,more={}){
+  if(!args.persistent)return oldOpenDesk(mode,more);if(pending)return;
+  if(localDesk)closeLocalDesk();deskReturnFocus=document.activeElement;localDesk={mode,...more};
+  tradeDraft=null;counterId=null;modeBuilt=mode;reviewRedeem=[];
+  let layer=el('section','local-desk');layer.id='local-desk';layer.setAttribute('role','dialog');layer.setAttribute('aria-modal','true');layer.setAttribute('aria-label','Your table desk');
+  let header=el('div','desk-top');let close=button('Close ✕',closeLocalDesk);close.id='close-local-desk';header.append(el('strong','','Your table desk'),close);
+  let body=el('div','local-desk-body');body.id='local-desk-body';let updates=el('div','desk-sync-note');updates.id='desk-sync-note';layer.append(header,updates,body);wrap.prepend(layer);
+  document.querySelector('.table-grid').setAttribute('inert','');redrawDesk();layer.scrollIntoView({block:'start',behavior:'instant'});close.focus({preventScroll:true});height();
+};
+function redrawDesk(){
+  if(!localDesk)return;
+  let root=wrap,originalArgs=args;wrap=document.getElementById('local-desk-body');
+  args={...args,property:localDesk.property,trade:args.state.trades.find(t=>t.id===localDesk.trade_id),property_actions:args.property_options?.[String(localDesk.property)]||[]};
+  try{
+    if(localDesk.mode==='property')propertyDesk();
+    else if(localDesk.mode==='trade'||modeBuilt==='counter')tradeComposer();
+    else if(localDesk.mode==='review')reviewTrade();
+    else if(localDesk.mode==='leave')leaveDesk();
+  }finally{wrap=root;args=originalArgs}height();
+}
+document.addEventListener('keydown',e=>{
+  if(!localDesk)return;if(e.key==='Escape'){e.preventDefault();closeLocalDesk()}
+  if(e.key==='Tab'){
+    let nodes=[...document.getElementById('local-desk').querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled)')].filter(n=>n.getClientRects().length);
+    let first=nodes[0],last=nodes.at(-1);
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus()}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus()}
+  }
+});
+function syncStatus(){
+  let n=document.getElementById('sync-line');if(!n)return;
+  let delayed=Date.now()-receivedAt>6500||args.sync_error;
+  let text=pending?'◌ Saving your move…':delayed?'Reconnecting… Your last saved position is safe.':args.feedback||'● Live table · updates arrive in the background';
+  if(n.textContent!==text)n.textContent=text;n.classList.toggle('delayed',!!delayed);
+}
+setInterval(syncStatus,1000);
+window.addEventListener('message',e=>{
+  if(e.source!==parent||e.data.type!=='streamlit:render')return;
+  let previousRoom=args.room,previousVersion=args.version,acknowledged=pending&&e.data.args?.ack===pending;
+  args=e.data.args||{};serverOffset=(args.server_now||Date.now()/1000)*1000-Date.now();
+  if(!args.sync_error)receivedAt=Date.now();
+  if(acknowledged){
+    pending=null;wrap.classList.remove('saving');document.querySelectorAll('button.busy').forEach(b=>{b.classList.remove('busy');b.removeAttribute('aria-busy');if(b.dataset.label)b.textContent=b.dataset.label});
+    if(args.ok&&localDesk&&['trade','review'].includes(localDesk.mode))closeLocalDesk();
+  }
+  let mode=args.mode||'board';
+  if(mode==='board'){
+    try{if(args.credentials){localStorage.setItem('london-session-'+args.credentials.code,JSON.stringify(args.credentials));localStorage.setItem('london-last-room',args.credentials.code)}if(args.clear)localStorage.removeItem('london-last-room')}catch{}
+    if(!booted){booted=true;if(!args.credentials){let saved=null;try{let code=args.invite||localStorage.getItem('london-last-room');saved=JSON.parse(localStorage.getItem('london-session-'+code)||'null')}catch{}send({type:'restore',credentials:saved,nonce:crypto.randomUUID()})}}
+    if(previousRoom!==args.room||previousVersion!==args.version||!document.getElementById('board')){
+      if(previousRoom!==args.room&&localDesk){pending=null;closeLocalDesk()}
+      renderBoard();if(args.persistent){playControls();balances();liveTrades()}
+      if(localDesk&&(localDesk.mode==='property'||(localDesk.mode==='review'&&modeBuilt!=='counter')))redrawDesk();
+      else if(localDesk){let note=document.getElementById('desk-sync-note');note.replaceChildren(el('span','quiet','The table changed. Your draft is preserved. '),button('Refresh available choices',()=>{note.replaceChildren();redrawDesk()}));}
+    }
+    if(acknowledged&&localDesk){if(localDesk.mode==='property')redrawDesk();let status=document.getElementById('status');if(status)status.textContent=args.feedback||''}
+    statusBanners();syncStatus();height();return;
+  }
+  // Compatibility with the original standalone desk bridge.
+  if(!pending){if(mode==='property')propertyDesk();else if(mode==='trade'){if(modeBuilt!=='trade')tradeComposer()}else if(mode==='review'){if(modeBuilt!=='counter')reviewTrade()}else if(mode==='leave')leaveDesk();if(modeBuilt!=='counter')modeBuilt=mode}
+  statusBanners();height();
+});
+
 new ResizeObserver(()=>{height();if(document.getElementById('board'))Object.keys(tokenNodes).forEach(pid=>putToken(pid,tokenPositions[pid]??args.state.players[pid].pos))}).observe(wrap);
 post('streamlit:componentReady',{apiVersion:1});
 </script></body></html>'''
